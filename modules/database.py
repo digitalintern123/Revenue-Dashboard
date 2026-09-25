@@ -16,6 +16,7 @@ from __future__ import annotations
 import calendar
 import datetime as dt
 import os
+import re
 from typing import Optional
 
 import pandas as pd
@@ -53,13 +54,19 @@ from .date_utils import safe_month_shift as _safe_month_shift
 # Local development:
 #   Set DATABASE_URL env var, or it falls back to SQLite automatically.
 
-def _get_database_url() -> str:
-    """Read DATABASE_URL from Streamlit secrets or environment.
+_SECRETS_SOURCE = ".streamlit/secrets.toml (Render Secret File)"
+_ENV_SOURCE = "DATABASE_URL environment variable"
+
+
+def _database_url_candidates() -> list[tuple[str, str]]:
+    """Every configured DATABASE_URL as (raw value, where it came from),
+    secrets.toml first, then the environment.
 
     Reads the secrets.toml file directly with tomllib instead of importing
     streamlit at module level. Importing streamlit here adds 3-6 seconds to
     startup time on Windows because it triggers Streamlit full initialisation.
     """
+    found: list[tuple[str, str]] = []
     try:
         import pathlib as _pl
         _secrets_path = _pl.Path(__file__).parent.parent / ".streamlit" / "secrets.toml"
@@ -74,15 +81,19 @@ def _get_database_url() -> str:
             if _toml is not None:
                 _raw = _secrets_path.read_text(encoding="utf-8")
                 _parsed = _toml.loads(_raw)
-                url = _parsed.get("DATABASE_URL", "")
-                if url:
-                    return str(url).strip()
+                url = str(_parsed.get("DATABASE_URL", "") or "")
+                if url.strip():
+                    found.append((url, _SECRETS_SOURCE))
     except Exception:
         pass
-    url = os.environ.get("DATABASE_URL", "").strip()
-    if url:
-        return url
-    # Local SQLite fallback — try data/ dir first, then /tmp
+    url = os.environ.get("DATABASE_URL", "")
+    if url.strip():
+        found.append((url, _ENV_SOURCE))
+    return found
+
+
+def _local_sqlite_url() -> str:
+    """Local SQLite fallback — try data/ dir first, then /tmp."""
     _repo_root = os.path.dirname(os.path.dirname(__file__))
     _local_db = os.path.join(_repo_root, "data", "revenue_analytics.db")
     try:
@@ -94,22 +105,29 @@ def _get_database_url() -> str:
     except OSError:
         return "sqlite:////tmp/revenue_analytics.db"
 
+
+_PG_URL_RE = re.compile(r"postgres(?:ql)?(?:\+\w+)?://[^\s'\"]+")
+
+
 def _normalize_database_url(raw: str) -> str:
-    """Clean up common copy-paste mistakes in DATABASE_URL.
+    """Pull the database URL out of whatever was pasted into DATABASE_URL.
 
     Hosting dashboards make it easy to paste more than the bare URL, e.g.
-    Neon's "psql 'postgresql://...'" snippet, a value wrapped in quotes,
-    or a "DATABASE_URL=" prefix. SQLAlchemy 2 also rejects the legacy
-    "postgres://" scheme that Heroku/Render-style URLs sometimes use.
+    Neon's "psql 'postgresql://...'" snippet, a value wrapped in quotes, a
+    "DATABASE_URL = ..." prefix, a trailing newline or an invisible
+    zero-width character. The postgres URL is found wherever it sits.
+    SQLAlchemy 2 also rejects the legacy "postgres://" scheme.
     Passwords with special characters (@ : / #) must be URL-encoded
     (e.g. @ -> %40); Neon and Render already give them encoded.
+    Returns "" when no postgres/sqlite URL can be found.
     """
-    url = (raw or "").strip()
-    if url.upper().startswith("DATABASE_URL="):
-        url = url.split("=", 1)[1].strip()
-    if url.lower().startswith("psql "):
-        url = url[5:].strip()
-    url = url.strip("'\"").strip()
+    text_ = (raw or "").strip()
+    if text_.startswith("sqlite"):
+        return text_
+    m = _PG_URL_RE.search(text_)
+    if not m:
+        return ""
+    url = m.group(0)
     if url.startswith("postgres://"):
         url = "postgresql://" + url[len("postgres://"):]
     # SQLAlchemy 2.1 maps a bare "postgresql://" to psycopg (v3), but this
@@ -119,14 +137,43 @@ def _normalize_database_url(raw: str) -> str:
     return url
 
 
-_DATABASE_URL = _normalize_database_url(_get_database_url())
-if not _DATABASE_URL.startswith(("postgresql", "sqlite")):
+def _describe_bad_value(raw: str) -> str:
+    """Safe hint about a bad value without revealing credentials: the first
+    4 characters (invisible ones escaped), the length, and a few flags."""
+    head = "".join(c if c.isprintable() and c != "\\" else f"\\u{ord(c):04x}" for c in raw[:4])
+    hints = [f"starts with '{head}'", f"{len(raw)} characters"]
+    if "://" not in raw:
+        hints.append("no '://' found")
+    if any(not c.isprintable() for c in raw.strip()):
+        hints.append("contains invisible characters")
+    return ", ".join(hints)
+
+
+def _resolve_database_url() -> str:
+    candidates = _database_url_candidates()
+    if not candidates:
+        return _local_sqlite_url()
+    for raw, source in candidates:
+        url = _normalize_database_url(raw)
+        if url:
+            if source != candidates[0][1]:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Ignoring invalid DATABASE_URL in %s; using the %s instead.",
+                    candidates[0][1], source,
+                )
+            return url
     # Never echo the value itself: it contains the database password.
+    problems = "; ".join(f"{src}: {_describe_bad_value(raw)}" for raw, src in candidates)
     raise ValueError(
-        "DATABASE_URL is not a valid database URL. It must start with "
-        "'postgresql://' (e.g. postgresql://user:password@host/dbname?sslmode=require). "
-        "Paste only the connection string, without 'psql', quotes or other text."
+        f"DATABASE_URL is not a valid database URL ({problems}). It must contain "
+        "a connection string starting with 'postgresql://' "
+        "(e.g. postgresql://user:password@host/dbname?sslmode=require). "
+        "Fix or remove the value in the place named above."
     )
+
+
+_DATABASE_URL = _resolve_database_url()
 _IS_POSTGRES = _DATABASE_URL.startswith(("postgresql", "postgres"))
 # DB_PATH kept as a string alias for the URL (used in some legacy references)
 DB_PATH = _DATABASE_URL
