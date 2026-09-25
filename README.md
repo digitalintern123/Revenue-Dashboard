@@ -306,6 +306,29 @@ PDF's own label rather than dropping the row, so new outlets stay visible
 (you may just see it listed under two slightly different names until the
 map is updated).
 
+## Deploying to Render
+
+The repo includes a `render.yaml` Blueprint that runs the app as a Render web service.
+
+1. Sign in at [render.com](https://render.com) and connect your GitHub account.
+2. Click **New → Blueprint**, pick this repository, and click **Apply**.
+   Render reads `render.yaml`, installs `requirements.txt`, and starts
+   `streamlit run Home.py` on the port Render assigns.
+3. When prompted, set **`DATABASE_URL`** to a hosted Postgres connection string
+   (e.g. Neon, or a Render Postgres instance's *External/Internal Database URL*).
+   Without it the app falls back to SQLite, which is wiped on every deploy/restart.
+4. In the service's **Environment → Secret Files**, add a file named
+   **`secrets.toml`** with your `[auth.users]` / `[auth.admins]` sections
+   (see `.streamlit/secrets.toml.example`; generate hashes with
+   `python modules/generate_password_hash.py`). The start command copies it to
+   `.streamlit/secrets.toml`. The app refuses to start without auth users.
+   You can also put `DATABASE_URL` in this file instead of step 3.
+5. Trigger **Manual Deploy → Deploy latest commit** after adding the secret file.
+
+The Blueprint uses the `free` plan, which sleeps after 15 minutes of inactivity
+(first request then takes ~1 minute) and has 512 MB RAM. For large PDF/Excel
+uploads or always-on access, change `plan` to `starter` or higher.
+
 ## Deploying to Streamlit Community Cloud
 
 1. Push this folder to a GitHub repository.
