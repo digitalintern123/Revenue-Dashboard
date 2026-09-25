@@ -34,6 +34,7 @@ from sqlalchemy import (
     select,
     text,
 )
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -137,6 +138,11 @@ if _IS_POSTGRES:
     if "sslmode=" not in _pg_url:
         _sep = "&" if "?" in _pg_url else "?"
         _pg_url = _pg_url + _sep + "sslmode=require"
+    # 60s query timeout via the libpq "options" startup parameter. Connection
+    # poolers (Neon's "-pooler" hosts run PgBouncer) reject unknown startup
+    # parameters, so only send it for direct connections.
+    _pg_host = make_url(_pg_url).host or ""
+    _connect_args = {} if "pooler" in _pg_host else {"options": "-c statement_timeout=60000"}
     ENGINE = create_engine(
         _pg_url,
         pool_pre_ping=True,    # handles Neon scale-to-zero reconnection
@@ -144,7 +150,7 @@ if _IS_POSTGRES:
         max_overflow=10,
         pool_timeout=60,
         pool_recycle=1800,     # recycle connections every 30 min
-        connect_args={"options": "-c statement_timeout=60000"},  # 60s query timeout
+        connect_args=_connect_args,
     )
 else:
     ENGINE = create_engine(
