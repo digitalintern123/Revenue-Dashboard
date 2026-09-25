@@ -18,7 +18,10 @@ require_login()
 bootstrap_session()
 render_user_badge()
 
-tab_analytics, tab_dsr = st.tabs(["📊 Analytics", "📤 Upload DSR"])
+from modules import ui
+ui.page_header("Encalm Eats", "Encalm Eats outlet performance by location.")
+
+tab_analytics, tab_dsr = st.tabs([":material/monitoring: Analytics", ":material/upload: Upload DSR"])
 
 # ---------------------------------------------------------------------------
 # Analytics tab
@@ -32,10 +35,8 @@ with tab_analytics:
         _filter_by_location,
         _render_kpi_cards,
         _render_subsidiary_table,
+        _render_overview_charts,
     )
-
-    st.title("🍽️ Encalm Eats")
-    st.caption("Encalm Eats outlet performance by location.")
 
     segment   = "Encalm Eats"
     page_key  = "eats"
@@ -66,8 +67,6 @@ with tab_analytics:
 
     cur_label = ranges["current_label"]
     cmp_label = ranges["compare_label"]
-
-    st.divider()
 
     # ------------------------------------------------------------------
     # Load DSR data for the selected date range.
@@ -133,7 +132,10 @@ with tab_analytics:
             seg_cmp if not seg_cmp.empty else None,
             None, cur_label, cmp_label, show_traffic=False,
         )
-        st.divider()
+        _render_overview_charts(
+            seg_cur, seg_cmp if not seg_cmp.empty else None, location, ranges,
+            lambda df: df[df["segment"] == segment] if (not df.empty and "segment" in df.columns) else df,
+        )
 
         def _render_one(loc_name: str):
             loc_norm = loc_name.title()
@@ -145,7 +147,7 @@ with tab_analytics:
                 df_c = seg_cur
                 df_p = seg_cmp if not seg_cmp.empty else None
 
-            st.markdown(f"**{loc_name}**")
+            ui.section(loc_name)
             _render_subsidiary_table(
                 segment, loc_name, df_c, df_p, None, cur_label, cmp_label
             )
@@ -159,7 +161,6 @@ with tab_analytics:
             ]) if not seg_cur.empty else []
             for loc_name in available:
                 _render_one(loc_name)
-                st.divider()
         else:
             _render_one(location)
 

@@ -13,6 +13,14 @@
 - **Trend indicators:** `📈` (growth) / `📉` (decline) / `➡️` (stable) / `🆕` (new entrant)
 - **Colors:** Growth = `#0B7A57` (dark green) / Decline = `#B91C1C` (dark red) / Neutral = `#64748B`
 
+- **Visual style (2026 refresh):**
+  - Theme in `.streamlit/config.toml`: navy `#1E3A5F` primary, gold `#C9A227` accent, Deploy toolbar hidden (`toolbarMode = "minimal"`).
+  - Shared helpers in `modules/ui.py`: `inject_css()` (called once from `Home.py`), `page_header()`, `section()`, `summary_line()`, `COLORS`.
+  - Charts in `modules/charts.py` (Plotly): current period = navy, compare period = grey, legend + hover on every chart.
+  - Logo: `assets/logo.svg` wordmark; drop `assets/encalm_logo.png` in to use the real logo instead.
+  - Dashboards (EHPL / Encalm Eats / Sky Plates): compact filter bar → summary line → Overview KPI cards → 2 charts → location tables.
+  - Sidebar navigation is grouped: **Data** (Upload Data, Previous Uploads) and **Dashboards** (EHPL, Encalm Eats, Sky Plates).
+
 ---
 
 ## Home.py — Upload & Database Management

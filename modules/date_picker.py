@@ -29,6 +29,7 @@ def render_date_dropdown(
     key_prefix: str,
     label: str = "Date",
     default_date: Optional[dt.date] = None,
+    compact: bool = False,
 ) -> Optional[dt.date]:
     """
     Render three chained dropdowns (Year → Month → Day) and return the
@@ -41,6 +42,9 @@ def render_date_dropdown(
       that year (and Day resets accordingly).
     - When Month changes, Day resets to the latest available day in
       that year+month.
+
+    compact=True shortens the labels to "<label>" / "Month" / "Day" so the
+    three boxes read as one control inside the dashboard filter bar.
 
     This prevents the stale-index bug where Streamlit keeps an old month
     or day index in session_state after the parent dropdown changes.
@@ -62,6 +66,10 @@ def render_date_dropdown(
     prev_month_key = f"__dp_{key_prefix}_prev_month"
 
     c1, c2, c3 = st.columns(3)
+    if compact:
+        year_label, month_label, day_label = label, "Month", "Day"
+    else:
+        year_label, month_label, day_label = f"{label} — Year", f"{label} — Month", f"{label} — Day"
 
     # ── Year ──────────────────────────────────────────────────────────────
     with c1:
@@ -76,7 +84,7 @@ def render_date_dropdown(
         else:
             year_index = years.index(default_date.year) if default_date.year in years else 0
         selected_year = st.selectbox(
-            f"{label} — Year", options=years, index=year_index, key=year_key
+            year_label, options=years, index=year_index, key=year_key
         )
 
     # ── Month — filtered to selected_year ─────────────────────────────────
@@ -112,7 +120,7 @@ def render_date_dropdown(
             month_index = months_in_year.index(default_month)
 
         selected_month = st.selectbox(
-            f"{label} — Month",
+            month_label,
             options=months_in_year,
             index=month_index,
             format_func=lambda m: calendar.month_name[m],
@@ -158,7 +166,7 @@ def render_date_dropdown(
             day_index = days_in_month.index(default_day)
 
         selected_day = st.selectbox(
-            f"{label} — Day",
+            day_label,
             options=days_in_month,
             index=day_index,
             key=day_key,

@@ -583,8 +583,7 @@ def render_ehpl_location(
     _render_table(table_rows, cur_label, cmp_label)
 
     # Terminal-wise — separate table
-    st.markdown("---")
-    st.markdown("#### Terminal-wise Performance")
+    st.markdown("##### Terminal-wise Performance")
     terminal_rows = _get_terminal_rows(location, cur_df, cmp_df)
     if terminal_rows:
         _render_table(terminal_rows, cur_label, cmp_label)

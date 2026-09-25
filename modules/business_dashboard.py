@@ -18,6 +18,7 @@ Nothing is hardcoded — all values come from the database.
 from __future__ import annotations
 
 import calendar as _cal
+import datetime as dt
 import traceback as _tb
 
 import pandas as pd
@@ -35,6 +36,9 @@ from modules.session import bootstrap_session, default_active_date, set_active_d
 from modules.app_logger import log_exception, show_friendly_error
 from modules.auth import require_login, render_user_badge
 from modules import table_style
+from modules import charts, ui
+from modules.cached_db import get_available_dates as _cached_available_dates
+from modules.cached_db import load_for_date_range as _cached_load_range
 
 LOCATIONS = ["All Locations", "Delhi", "Hyderabad", "Goa", "Bhogapuram"]
 
@@ -471,50 +475,49 @@ def _render_kpi_cards(
     pen     = ra.safe_div(cur_pax, cur_traf) * 100 if cur_traf else None
     spp     = ra.safe_div(cur_rev, cur_traf) if cur_traf else None
 
-    st.markdown("##### Location Total")
-    cols = st.columns(5 if show_traffic else 4)
-
-    with cols[0]:
-        st.metric(
-            f"Revenue ({cur_label})",
-            format_money(cur_rev),
-            delta=format_pct(rev_chg) if rev_chg is not None else None,
-            help=f"Compare period: {format_money(cmp_rev) if cmp_rev else '—'} ({cmp_label})",
-        )
-    with cols[1]:
-        st.metric(
-            f"PAX ({cur_label})",
-            format_pax(cur_pax),
-            delta=format_pct(pax_chg) if pax_chg is not None else None,
-            help=f"Compare period: {format_pax(cmp_pax) if cmp_pax else '—'} ({cmp_label})",
-        )
-    with cols[2]:
-        if aop_total:
-            st.metric(
-                "AOP Target",
-                format_money(aop_total),
-                help="Prorated AOP target for this period",
-            )
-            st.metric(
-                "AOP Variance",
-                format_pct(aop_var) if aop_var is not None else "—",
-            )
-        else:
-            st.metric("AOP", "—", help="No AOP target data for this period")
+    ui.section("Overview")
+    # One card per metric in a single row. Labels stay short so they never
+    # truncate; the period is in the summary line above and in each tooltip.
+    cards = [
+        dict(label="Revenue", value=format_money(cur_rev),
+             delta=format_pct(rev_chg) if rev_chg is not None else None,
+             help=f"{cur_label}. Compare period ({cmp_label}): "
+                  f"{format_money(cmp_rev) if cmp_rev else '—'}"),
+        dict(label="PAX", value=format_pax(cur_pax),
+             delta=format_pct(pax_chg) if pax_chg is not None else None,
+             help=f"{cur_label}. Compare period ({cmp_label}): "
+                  f"{format_pax(cmp_pax) if cmp_pax else '—'}"),
+    ]
+    if aop_total:
+        cards.append(dict(
+            label="AOP Target", value=format_money(aop_total),
+            delta=(f"{format_pct(aop_var)} vs AOP" if aop_var is not None else None),
+            help="Prorated AOP target for this period; delta is revenue variance vs AOP",
+        ))
+    else:
+        cards.append(dict(label="AOP Target", value="—", help="No AOP target data for this period"))
 
     if show_traffic:
-        with cols[3]:
-            st.metric("Traffic", format_pax(cur_traf) if cur_traf else "—",
-                      help="Terminal traffic for this location")
-        with cols[4]:
-            pen_str = f"{pen:.2f}%" if pen is not None else "—"
-            spp_str = format_spp(spp) if spp is not None else "—"
-            st.metric("PEN %", pen_str, help="PAX / Traffic x 100")
-            st.metric("SPP", spp_str, help="Revenue / Traffic")
+        cards += [
+            dict(label="Traffic", value=format_pax(cur_traf) if cur_traf else "—",
+                 help="Terminal traffic for this location"),
+            dict(label="PEN %", value=f"{pen:.2f}%" if pen is not None else "—",
+                 help="PAX / Traffic x 100"),
+            dict(label="SPP", value=format_spp(spp) if spp is not None else "—",
+                 help="Revenue / Traffic"),
+        ]
     else:
-        with cols[3]:
-            st.metric("PAX (compare)", format_pax(cmp_pax) if cmp_pax else "—",
-                      help=cmp_label)
+        cards.append(dict(label="PAX (compare)",
+                          value=format_pax(cmp_pax) if cmp_pax else "—", help=cmp_label))
+
+    # Up to 4 cards fit on one row; 5–6 cards wrap into rows of 3 so the
+    # rupee values are never truncated.
+    per_row = len(cards) if len(cards) <= 4 else 3
+    for i in range(0, len(cards), per_row):
+        for col, card in zip(st.columns(per_row), cards[i:i + per_row]):
+            with col:
+                st.metric(card["label"], card["value"], delta=card.get("delta"),
+                          help=card.get("help"))
 
 
 # ---------------------------------------------------------------------------
@@ -527,7 +530,7 @@ def _render_terminal_section(
     cur_label: str,
     cmp_label: str,
 ):
-    st.markdown("#### Terminal-wise Performance")
+    ui.section("Terminal-wise Performance")
 
     if cur_df is None or cur_df.empty:
         st.info("No data for terminal analysis.")
@@ -842,20 +845,25 @@ def _render_filters_and_load(page_key: str, available_dates: list | None = None)
         st.info("No data available. Upload a report on the Home page first.")
         st.stop()
 
-    col_date, col_loc = st.columns([2, 1])
+    bar = st.container(border=True)
+    with bar:
+        col_date, col_type, col_loc = st.columns([3, 1.3, 1.3])
+        with col_date:
+            anchor_date = date_picker.render_date_dropdown(
+                available_dates,
+                key_prefix=f"{page_key}_anchor",
+                label="Report Date",
+                default_date=default_active_date(),
+                compact=True,
+            )
+            set_active_date(anchor_date)
 
-    with col_date:
-        anchor_date = date_picker.render_date_dropdown(
-            available_dates,
-            key_prefix=f"{page_key}_anchor",
-            label="Report Date",
-            default_date=default_active_date(),
-        )
-        set_active_date(anchor_date)
-
-    ranges = comparison_widget.render_comparison_selector(
-        anchor_date, key_prefix=f"{page_key}_cmp"
-    )
+        col_cmp, _ = st.columns([3, 2.6])
+        with col_cmp:
+            ranges = comparison_widget.render_comparison_selector(
+                anchor_date, key_prefix=f"{page_key}_cmp",
+                type_container=col_type, compact=True,
+            )
 
     # ── Load data ──────────────────────────────────────────────────────────
     current_df_all = database.load_for_date_range(
@@ -895,7 +903,58 @@ def _render_filters_and_load(page_key: str, available_dates: list | None = None)
             key=prev_key,
         )
 
+    ui.summary_line(ranges["current_label"], ranges["compare_label"], location)
     return location, ranges, current_df_all, compare_df_all, aop_df
+
+
+def _render_overview_charts(
+    cur_df: pd.DataFrame,
+    cmp_df: pd.DataFrame | None,
+    location: str,
+    ranges: dict,
+    row_filter,
+) -> None:
+    """Two charts side by side: revenue by location/outlet (current vs
+    compare) and the 30-day daily revenue trend ending on the report date."""
+    by = "location" if location == "All Locations" else "outlet"
+    # Month/Year-wise periods can end in the future — anchor the trend on
+    # the latest date that actually has data inside the current period.
+    end = ranges["current_end"]
+    try:
+        _dates = [d for d in _cached_available_dates() if d <= end]
+        if _dates:
+            end = max(_dates)
+    except Exception:
+        pass
+    try:
+        trend = _cached_load_range(end - dt.timedelta(days=29), end)
+        trend = _filter_by_location(row_filter(trend), location)
+        if not trend.empty:
+            trend = (trend.assign(date=pd.to_datetime(trend["date"]))
+                          .groupby("date", as_index=False)["revenue"].sum())
+    except Exception as e:
+        log_exception(e, context="overview trend chart")
+        trend = pd.DataFrame()
+
+    if trend.empty:
+        # No daily history for this business (e.g. DSR-only data) — bar only.
+        with st.container(border=True):
+            charts.revenue_by_group_bar(
+                cur_df, cmp_df, by, ranges["current_label"], ranges["compare_label"],
+                title=f"Revenue by {by}",
+            )
+        return
+
+    c1, c2 = st.columns(2)
+    with c1, st.container(border=True):
+        charts.revenue_by_group_bar(
+            cur_df, cmp_df, by, ranges["current_label"], ranges["compare_label"],
+            title=f"Revenue by {by}",
+        )
+    with c2, st.container(border=True):
+        charts.revenue_trend_line(
+            trend, title="Daily revenue — last 30 days", highlight_date=end,
+        )
 
 
 def _filter_by_location(df: pd.DataFrame, location: str) -> pd.DataFrame:
@@ -920,11 +979,11 @@ def render_ehpl_page(page_key: str = "ehpl"):
         BHOGAPURAM_GROUPS, BHOGAPURAM_SUBTOTALS, BHOGAPURAM_ROW_ORDER,
     )
 
-    st.title("EHPL")
-    st.caption(
+    ui.page_header(
+        "EHPL",
         "Airport hospitality — Lounges, Spa, Nap & Shower, Atithya, "
         "Enwrap, Business Centre, RDC. "
-        "PEN % = PAX / Terminal Traffic x 100.  SPP = Revenue / Terminal Traffic."
+        "PEN % = PAX / Terminal Traffic x 100.  SPP = Revenue / Terminal Traffic.",
     )
 
     location, ranges, current_df_all, compare_df_all, aop_df = \
@@ -932,8 +991,6 @@ def render_ehpl_page(page_key: str = "ehpl"):
 
     cur_label = ranges["current_label"]
     cmp_label = ranges["compare_label"]
-
-    st.divider()
 
     _non_ehpl = {"Encalm Eats", "Sky Plates", "Subsidiary"}
 
@@ -954,6 +1011,10 @@ def render_ehpl_page(page_key: str = "ehpl"):
         st.stop()
 
     cmp_df_arg = ehpl_cmp if not ehpl_cmp.empty else None
+
+    _aop_loc = _filter_by_location(aop_df, location) if not aop_df.empty else None
+    _render_kpi_cards(ehpl_cur, cmp_df_arg, _aop_loc, cur_label, cmp_label, show_traffic=True)
+    _render_overview_charts(ehpl_cur, cmp_df_arg, location, ranges, _ehpl_filter)
 
     def _render_one_location(loc_name: str):
         loc_norm = loc_name.title()
@@ -1009,12 +1070,11 @@ def render_ehpl_page(page_key: str = "ehpl"):
             st.warning("No EHPL data available for the selected period.")
             st.stop()
 
-        for i, loc_name in enumerate(available):
-            if i > 0:
-                st.markdown("---")
-            st.markdown(f"### {loc_name}")
+        for loc_name in available:
+            ui.section(loc_name)
             _render_one_location(loc_name)
     else:
+        ui.section(location)
         _render_one_location(location)
 
 
@@ -1026,11 +1086,10 @@ def render_subsidiary_page(segment: str, page_key: str, icon: str = ""):
     bootstrap_session()
     render_user_badge()
 
-    seg_label = f"{icon} {segment}".strip()
-    st.title(seg_label)
-    st.caption(
+    ui.page_header(
+        segment,
         f"{segment} performance by location and outlet. "
-        "No airport terminal metrics shown for this business."
+        "No airport terminal metrics shown for this business.",
     )
 
     location, ranges, current_df_all, compare_df_all, aop_df = \
@@ -1038,8 +1097,6 @@ def render_subsidiary_page(segment: str, page_key: str, icon: str = ""):
 
     cur_label = ranges["current_label"]
     cmp_label = ranges["compare_label"]
-
-    st.divider()
 
     # Filter by segment
     def _seg_filter(df):
@@ -1064,7 +1121,9 @@ def render_subsidiary_page(segment: str, page_key: str, icon: str = ""):
         seg_cur, seg_cmp if not seg_cmp.empty else None,
         None, cur_label, cmp_label, show_traffic=False
     )
-    st.divider()
+    _render_overview_charts(
+        seg_cur, seg_cmp if not seg_cmp.empty else None, location, ranges, _seg_filter,
+    )
 
     def _render_one_location(loc_name: str):
         loc_norm = loc_name.title()
@@ -1075,7 +1134,7 @@ def render_subsidiary_page(segment: str, page_key: str, icon: str = ""):
                 seg_cmp if not seg_cmp.empty else None
             )
 
-        st.markdown(f"**{loc_name}**")
+        ui.section(loc_name)
         _render_subsidiary_table(
             segment, loc_name, df_c, df_p, None, cur_label, cmp_label
         )
@@ -1097,8 +1156,8 @@ def render_subsidiary_page(segment: str, page_key: str, icon: str = ""):
 
         for loc_name in available:
             _render_one_location(loc_name)
-            st.divider()
     else:
+        ui.section(location)
         _render_subsidiary_table(
             segment, location, seg_cur,
             seg_cmp if not seg_cmp.empty else None,

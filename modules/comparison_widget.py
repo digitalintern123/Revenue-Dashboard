@@ -32,7 +32,12 @@ MONTH_NAMES = [
 ]
 
 
-def render_comparison_selector(anchor_date: dt.date, key_prefix: str) -> dict:
+def render_comparison_selector(
+    anchor_date: dt.date,
+    key_prefix: str,
+    type_container=None,
+    compact: bool = False,
+) -> dict:
     """
     Render the comparison-type controls and return the resolved ranges dict
     from revenue_analysis.resolve_comparison_ranges(), with an extra
@@ -42,9 +47,21 @@ def render_comparison_selector(anchor_date: dt.date, key_prefix: str) -> dict:
     `key_prefix` must be unique per page (Streamlit widget keys can't
     collide across pages that might render this at the same time within
     one session) — e.g. "exec_summary", "rev_comparison", "insights".
+
+    `type_container` (optional) is a column/container to draw the
+    Comparison Type box in, so it can sit on the same row as the report
+    date. `compact=True` uses shorter labels and horizontal radios for the
+    dashboard filter bar. Neither changes the returned ranges.
     """
-    comparison_type = st.selectbox(
-        "🔍 Comparison Type",
+    import contextlib
+    with (type_container if type_container is not None else contextlib.nullcontext()):
+        comparison_type = _comparison_type_box(key_prefix, compact)
+    return _render_compare_controls(anchor_date, key_prefix, comparison_type, compact)
+
+
+def _comparison_type_box(key_prefix: str, compact: bool) -> str:
+    return st.selectbox(
+        "Compare by" if compact else "🔍 Comparison Type",
         options=ra.COMPARISON_TYPES,
         index=0,
         key=f"{key_prefix}_comparison_type",
@@ -55,6 +72,10 @@ def render_comparison_selector(anchor_date: dt.date, key_prefix: str) -> dict:
         ),
     )
 
+
+def _render_compare_controls(
+    anchor_date: dt.date, key_prefix: str, comparison_type: str, compact: bool
+) -> dict:
     mode = "Full Period"
     compare_year = None
     compare_month = None
@@ -77,8 +98,10 @@ def render_comparison_selector(anchor_date: dt.date, key_prefix: str) -> dict:
             key_prefix=f"{key_prefix}_day_date",
             label="Compare Date",
             default_date=default_compare_date,
+            compact=compact,
         )
-        st.caption("Any date in the database can be selected — both date selectors are fully independent.")
+        if not compact:
+            st.caption("Any date in the database can be selected — both date selectors are fully independent.")
 
     elif comparison_type == "Week-wise":
         mode_col, week_col = st.columns(2)
@@ -87,6 +110,7 @@ def render_comparison_selector(anchor_date: dt.date, key_prefix: str) -> dict:
                 "Compare basis",
                 options=ra.COMPARISON_MODES,
                 index=0,
+                horizontal=compact,
                 key=f"{key_prefix}_week_mode",
                 help=(
                     "Full Period compares the two whole calendar weeks "
@@ -121,6 +145,7 @@ def render_comparison_selector(anchor_date: dt.date, key_prefix: str) -> dict:
                 "Compare basis",
                 options=ra.COMPARISON_MODES,
                 index=0,
+                horizontal=compact,
                 key=f"{key_prefix}_month_mode",
             )
         available_year_months = database.get_available_year_months()
@@ -155,6 +180,7 @@ def render_comparison_selector(anchor_date: dt.date, key_prefix: str) -> dict:
                 "Compare basis",
                 options=ra.COMPARISON_MODES,
                 index=0,
+                horizontal=compact,
                 key=f"{key_prefix}_year_mode",
             )
         available_years = database.get_available_years()
