@@ -93,7 +93,39 @@ def _get_database_url() -> str:
     except OSError:
         return "sqlite:////tmp/revenue_analytics.db"
 
-_DATABASE_URL = _get_database_url()
+def _normalize_database_url(raw: str) -> str:
+    """Clean up common copy-paste mistakes in DATABASE_URL.
+
+    Hosting dashboards make it easy to paste more than the bare URL, e.g.
+    Neon's "psql 'postgresql://...'" snippet, a value wrapped in quotes,
+    or a "DATABASE_URL=" prefix. SQLAlchemy 2 also rejects the legacy
+    "postgres://" scheme that Heroku/Render-style URLs sometimes use.
+    Passwords with special characters (@ : / #) must be URL-encoded
+    (e.g. @ -> %40); Neon and Render already give them encoded.
+    """
+    url = (raw or "").strip()
+    if url.upper().startswith("DATABASE_URL="):
+        url = url.split("=", 1)[1].strip()
+    if url.lower().startswith("psql "):
+        url = url[5:].strip()
+    url = url.strip("'\"").strip()
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    # SQLAlchemy 2.1 maps a bare "postgresql://" to psycopg (v3), but this
+    # project installs psycopg2-binary — name the driver explicitly.
+    if url.startswith("postgresql://"):
+        url = "postgresql+psycopg2://" + url[len("postgresql://"):]
+    return url
+
+
+_DATABASE_URL = _normalize_database_url(_get_database_url())
+if not _DATABASE_URL.startswith(("postgresql", "sqlite")):
+    # Never echo the value itself: it contains the database password.
+    raise ValueError(
+        "DATABASE_URL is not a valid database URL. It must start with "
+        "'postgresql://' (e.g. postgresql://user:password@host/dbname?sslmode=require). "
+        "Paste only the connection string, without 'psql', quotes or other text."
+    )
 _IS_POSTGRES = _DATABASE_URL.startswith(("postgresql", "postgres"))
 # DB_PATH kept as a string alias for the URL (used in some legacy references)
 DB_PATH = _DATABASE_URL
