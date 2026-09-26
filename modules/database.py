@@ -1978,6 +1978,12 @@ def get_traffic_total_for_range(
     return pd.DataFrame(results)
 
 
+
+# The traffic joins below read terminal traffic through this hook. It is the
+# plain SQL loader here; modules/cached_db.py swaps in a Streamlit-cached
+# version so repeated joins on one page (and on every rerun) don't re-query.
+_traffic_totals_loader = get_traffic_total_for_range
+
 def _load_traffic_overlapping_range(
     start_date: dt.date, end_date: dt.date, location: Optional[str] = None
 ) -> pd.DataFrame:
@@ -2096,7 +2102,7 @@ def join_revenue_with_traffic(revenue_df: pd.DataFrame, traffic_df: Optional[pd.
     location_totals["date"] = start_date
 
     if traffic_df is None:
-        traffic_totals = get_traffic_total_for_range(start_date, end_date)
+        traffic_totals = _traffic_totals_loader(start_date, end_date)
         if traffic_totals.empty:
             location_totals["traffic"] = pd.NA
             location_totals["traffic_is_estimated"] = False
@@ -2155,7 +2161,7 @@ def join_revenue_with_traffic_by_outlet(
     start_date, end_date = dates.min(), dates.max()
 
     # Get all terminal-level traffic for this date range
-    traffic_totals = get_traffic_total_for_range(start_date, end_date)
+    traffic_totals = _traffic_totals_loader(start_date, end_date)
     # Build lookup: (location, terminal) → traffic info
     # Normalise location to title-case so "GOA"/"DELHI" (revenue) matches
     # "Goa"/"Delhi" (traffic) in the lookup.

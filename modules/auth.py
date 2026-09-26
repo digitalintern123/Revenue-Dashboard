@@ -50,10 +50,12 @@ _FAILED_ATTEMPTS_KEY = "_failed_login_attempts"
 _LOCKOUT_UNTIL_KEY = "_lockout_until"
 _SESSION_CREATED_KEY = "_session_created_at"
 _LAST_ACTIVITY_KEY = "_last_activity_at"
+_LAST_SESSION_CHECK_KEY = "_last_session_check_at"
 _MAX_ATTEMPTS = 5           # lock after 5 wrong passwords
 _LOCKOUT_SECONDS = 300      # 5 minute lockout
 _SESSION_TIMEOUT_HOURS = 8  # absolute auto-logout after 8 hours, active or not
 _INACTIVITY_TIMEOUT_MINUTES = 30  # auto-logout after 30 minutes with no activity
+_SESSION_CHECK_INTERVAL_SECONDS = 60  # how often to re-validate the token in the DB
 
 
 def _hash_password(password: str, salt: str) -> str:
@@ -166,7 +168,7 @@ def logout() -> None:
             pass  # DB unavailable — still clear local state
     for key in [_SESSION_KEY, _SESSION_TOKEN_KEY, _LOGIN_ATTEMPTED_KEY,
                 _SESSION_CREATED_KEY, _FAILED_ATTEMPTS_KEY, _LOCKOUT_UNTIL_KEY,
-                _LAST_ACTIVITY_KEY]:
+                _LAST_ACTIVITY_KEY, _LAST_SESSION_CHECK_KEY]:
         st.session_state.pop(key, None)
 
 
@@ -220,8 +222,15 @@ def require_login() -> None:
         # Check that the session token is still registered in the DB.
         # If another tab logged out (or an admin forced logout), this will
         # catch it and terminate this session too.
+        # Checking the DB costs two round trips, so do it at most once per
+        # _SESSION_CHECK_INTERVAL_SECONDS rather than on every click. A logout
+        # from another tab therefore takes effect here within that interval.
         token = st.session_state.get(_SESSION_TOKEN_KEY)
+        last_check = st.session_state.get(_LAST_SESSION_CHECK_KEY)
+        if token and last_check and (now - last_check).total_seconds() < _SESSION_CHECK_INTERVAL_SECONDS:
+            token = None
         if token:
+            st.session_state[_LAST_SESSION_CHECK_KEY] = now
             try:
                 from . import database as _db
                 if not _db.is_session_valid(token):

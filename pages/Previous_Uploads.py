@@ -8,7 +8,7 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from modules import database, date_picker
+from modules import cached_db, database, date_picker
 from modules.formatting import format_money, format_pax
 from modules.session import bootstrap_session, set_active_date, set_compare_date
 from modules.auth import require_login, render_user_badge
@@ -34,7 +34,7 @@ tab_hist, tab_dates, tab_preview, tab_load = st.tabs([
 # ---------------------------------------------------------------------------
 with tab_hist:
 
-    history_df = database.get_upload_history()
+    history_df = cached_db.get_upload_history()
     if history_df.empty:
         st.info("No files have been uploaded yet. Go to the main page to upload a report.")
     else:
@@ -72,7 +72,7 @@ with tab_hist:
 # ---------------------------------------------------------------------------
 with tab_dates:
 
-    dates_summary = database.get_dates_summary()
+    dates_summary = cached_db.get_dates_summary()
     if dates_summary.empty:
         st.info("No revenue data stored yet.")
     else:
@@ -96,7 +96,7 @@ with tab_dates:
 with tab_preview:
     st.caption("Spot-check what is actually stored in the database for Revenue, AOP, and Traffic.")
 
-    available_dates = database.get_available_dates()
+    available_dates = cached_db.get_available_dates()
 
     preview_tab1, preview_tab2 = st.tabs([":material/today: Single Date", ":material/date_range: Date Range"])
 
@@ -107,7 +107,7 @@ with tab_preview:
             single_date = date_picker.render_date_dropdown(
                 available_dates, key_prefix="preview_single", label="Date to preview"
             )
-            single_df = database.load_for_date(single_date)
+            single_df = cached_db.load_for_date(single_date)
             if single_df.empty:
                 st.warning(f"No rows found for {single_date}.")
             else:
@@ -177,7 +177,7 @@ with tab_preview:
             range_end = date_picker.render_date_dropdown(
                 end_options, key_prefix="preview_range_end", label="To",
                 default_date=max(end_options))
-            range_df = database.load_for_date_range(range_start, range_end)
+            range_df = cached_db.load_for_date_range(range_start, range_end)
             if range_df.empty:
                 st.warning(f"No rows found between {range_start} and {range_end}.")
             else:
@@ -247,7 +247,7 @@ with tab_load:
         "the other pages — no re-uploading required."
     )
 
-    available_dates = database.get_available_dates()
+    available_dates = cached_db.get_available_dates()
     if not available_dates:
         st.info("No dates available yet. Upload a report or import historical data first.")
     else:

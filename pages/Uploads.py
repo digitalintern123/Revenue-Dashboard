@@ -13,7 +13,7 @@ render_user_badge()
 from modules import ui
 ui.page_header("Upload Data", "Upload revenue reports, AOP targets, and traffic files. Formats are auto-detected.")
 # Import and run the upload panels defined in a shared module
-from modules import data_processor, database
+from modules import cached_db, data_processor, database
 from modules.auth import current_user as _current_user
 from modules import upload_status
 import io as _io
@@ -155,6 +155,7 @@ with tab_hist:
         if _hist_latest:
             set_active_date(_hist_latest)
         st.session_state["_up_hist_results"] = pending_hist
+        clear_data_cache()  # new data must show on every page immediately
         st.rerun()
 
     if "_up_hist_results" in st.session_state:
@@ -231,6 +232,7 @@ with tab_aop:
                     pending_aop.append({"success":False,"file_name":aop_file.name,
                         "message":str(exc),"stage":"saving"})
         st.session_state["_up_aop_results"] = pending_aop
+        clear_data_cache()  # new data must show on every page immediately
         st.rerun()
 
     if "_up_aop_results" in st.session_state:
@@ -288,6 +290,7 @@ with tab_traffic:
                     pending_t.append({"success":False,"file_name":_tf.name,
                         "message":_msg,"stage":_stage})
         st.session_state["_up_traffic_results"] = pending_t
+        clear_data_cache()  # new data must show on every page immediately
         st.rerun()
 
     if "_up_traffic_results" in st.session_state:
@@ -310,7 +313,7 @@ with tab_traffic:
 # ─────────────────────────────────────────────────────────────────────────────
 with tab_db:
     with safe_run("Database stats", error_type="db_error"):
-        stats = database.get_db_stats()
+        stats = cached_db.get_db_stats()
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Total Rows", f"{stats['total_rows']:,}")
         m2.metric("Distinct Dates", f"{stats['distinct_dates']:,}")

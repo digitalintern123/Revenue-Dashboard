@@ -28,7 +28,7 @@ tab_analytics, tab_dsr = st.tabs([":material/monitoring: Analytics", ":material/
 # ---------------------------------------------------------------------------
 with tab_analytics:
     import pandas as pd
-    from modules import comparison_widget, database, date_picker
+    from modules import cached_db, comparison_widget, database, date_picker
     from modules.session import default_active_date, set_active_date
     from modules.business_dashboard import (
         _render_filters_and_load,
@@ -43,11 +43,11 @@ with tab_analytics:
 
     # Use DSR dates when available; fall back to revenue_master dates
     try:
-        dsr_dates = database.get_encalm_eats_dsr_dates()
+        dsr_dates = cached_db.get_encalm_eats_dsr_dates()
     except Exception:
         dsr_dates = []
 
-    eats_dates = dsr_dates if dsr_dates else database.get_available_dates()
+    eats_dates = dsr_dates if dsr_dates else cached_db.get_available_dates()
 
     if not eats_dates:
         st.warning(
@@ -75,10 +75,10 @@ with tab_analytics:
     # Prefer DSR data when it exists; fall back to revenue_master.
     # ------------------------------------------------------------------
     try:
-        dsr_cur = database.load_encalm_eats_dsr_for_range(
+        dsr_cur = cached_db.load_encalm_eats_dsr_for_range(
             ranges["current_start"], ranges["current_end"]
         )
-        dsr_cmp = database.load_encalm_eats_dsr_for_range(
+        dsr_cmp = cached_db.load_encalm_eats_dsr_for_range(
             ranges["compare_start"], ranges["compare_end"]
         )
     except Exception:
@@ -254,6 +254,9 @@ with tab_dsr:
 
             ins = save_result["inserted"]
             skp = save_result["skipped"]
+            if ins > 0:
+                from modules.cached_db import clear_data_cache
+                clear_data_cache()
 
             if ins > 0:
                 st.success(

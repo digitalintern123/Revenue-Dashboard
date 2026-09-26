@@ -36,7 +36,7 @@ from modules.session import bootstrap_session, default_active_date, set_active_d
 from modules.app_logger import log_exception, show_friendly_error
 from modules.auth import require_login, render_user_badge
 from modules import table_style
-from modules import charts, ui
+from modules import cached_db, charts, ui
 from modules.cached_db import get_available_dates as _cached_available_dates
 from modules.cached_db import load_for_date_range as _cached_load_range
 
@@ -416,7 +416,7 @@ def _render_mis_table(rows: list[dict], cur_label: str, cmp_label: str, location
 # ---------------------------------------------------------------------------
 def _load_aop(ranges: dict) -> pd.DataFrame:
     try:
-        _raw_aop = database.load_aop_targets_for_range(
+        _raw_aop = cached_db.load_aop_targets_for_range(
             ranges["current_start"], ranges["current_end"]
         )
         if _raw_aop is not None and not _raw_aop.empty:
@@ -840,7 +840,7 @@ def _render_filters_and_load(page_key: str, available_dates: list | None = None)
     """
     # ── Date first (drives which locations are available) ──────────────────
     if available_dates is None:
-        available_dates = database.get_available_dates()
+        available_dates = cached_db.get_available_dates()
     if not available_dates:
         st.info("No data available. Upload a report on the Home page first.")
         st.stop()
@@ -866,10 +866,10 @@ def _render_filters_and_load(page_key: str, available_dates: list | None = None)
             )
 
     # ── Load data ──────────────────────────────────────────────────────────
-    current_df_all = database.load_for_date_range(
+    current_df_all = cached_db.load_for_date_range(
         ranges["current_start"], ranges["current_end"]
     )
-    compare_df_all = database.load_for_date_range(
+    compare_df_all = cached_db.load_for_date_range(
         ranges["compare_start"], ranges["compare_end"]
     )
     aop_df = _load_aop(ranges)

@@ -18,7 +18,7 @@ import datetime as dt
 
 import streamlit as st
 
-from . import database
+from . import cached_db, database
 from . import date_picker
 from . import revenue_analysis as ra
 # FIX (Bug 5): previously this module accessed the private function
@@ -81,7 +81,7 @@ def _render_compare_controls(
     compare_month = None
     compare_week_start = None
     compare_date = None
-    available_dates = database.get_available_dates()
+    available_dates = cached_db.get_available_dates()
 
     if comparison_type == "Day-wise":
         # All available dates are offered — no restriction based on anchor_date.
@@ -119,7 +119,7 @@ def _render_compare_controls(
                     "on both sides."
                 ),
             )
-        available_week_starts = database.get_available_week_starts()
+        available_week_starts = cached_db.get_available_week_starts()
         cur_monday, _ = ra.week_range(anchor_date)
         default_compare_monday = cur_monday - dt.timedelta(days=7)
         # All weeks available — including the current week (e.g. compare this week vs last week vs any other)
@@ -148,7 +148,7 @@ def _render_compare_controls(
                 horizontal=compact,
                 key=f"{key_prefix}_month_mode",
             )
-        available_year_months = database.get_available_year_months()
+        available_year_months = cached_db.get_available_year_months()
         available_years_for_month = sorted({y for y, m in available_year_months}, reverse=True)
         # FIX (Bug 5): use the directly-imported function rather than
         # accessing a private symbol on a different module.
@@ -183,7 +183,7 @@ def _render_compare_controls(
                 horizontal=compact,
                 key=f"{key_prefix}_year_mode",
             )
-        available_years = database.get_available_years()
+        available_years = cached_db.get_available_years()
         # All years available — including the current year
         other_years = available_years or [anchor_date.year - 1]
         with year_col:
