@@ -12,7 +12,7 @@ render_user_badge()
 # Home.py is the Streamlit entry point; we exec the upload portion here
 # so the logic lives in one place (Home.py) and this page just surfaces it.
 from modules import ui
-ui.page_header("Upload Data", "Upload revenue reports, AOP targets, and traffic files. Formats are auto-detected.")
+ui.page_header("Upload Data", "Upload revenue reports, AOP targets, and traffic files. Formats are auto-detected.", icon="upload")
 # Import and run the upload panels defined in a shared module
 from modules import cached_db, data_processor, database
 from modules.auth import current_user as _current_user
@@ -26,13 +26,11 @@ from modules.app_logger import safe_run
 def _check_rate_limit():
     return database.check_upload_rate_limit(_current_user() or "")
 
-tab_rev, tab_hist, tab_aop, tab_traffic, tab_db = st.tabs([
-    ":material/receipt_long: Daily Revenue",
-    ":material/history_edu: Historical Import",
-    ":material/flag: AOP Targets",
-    ":material/flight: Traffic",
-    ":material/database: Database",
-])
+tab_rev, tab_hist, tab_aop, tab_traffic, tab_db = st.tabs(
+    ["Daily Revenue", "Historical Import", "AOP Targets", "Traffic", "Database"],
+    key="upload_tabs",
+)
+ui.tab_icons("upload_tabs", ["receipt", "archive", "target", "plane", "database"])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 1 — Daily Revenue Upload

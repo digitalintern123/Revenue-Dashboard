@@ -14,3 +14,12 @@ If the logo changes, replace `encalm_logo.png` and regenerate the other two
 
 Brand colours (sampled from the logo): navy `#142248`, gold `#CBA578`.
 Font: Montserrat (Google Fonts), the closest free match to the wordmark.
+
+## Icons
+
+`icons/` holds the [Lucide](https://lucide.dev) icons used for the sidebar
+pages, tabs and page headers — unmodified SVGs from `lucide-static` 1.48.0
+(ISC licence, see `icons/LICENSE`). They are drawn via CSS masks
+(`modules/ui.py`: `sidebar_nav_icons`, `tab_icons`, `icon_html`), so they take
+the surrounding text colour. To add one, copy its SVG from lucide.dev into
+`icons/` and refer to it by file name (without `.svg`).

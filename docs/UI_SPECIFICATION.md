@@ -22,6 +22,7 @@
   - Charts in `modules/charts.py` (Plotly): current period = navy, compare period = warm grey, legend + hover on every chart.
   - Dashboards (EHPL / Encalm Eats / Sky Plates): compact filter bar → summary line → Overview KPI cards → 2 charts → location tables.
   - Sidebar navigation is grouped: **Data** (Upload Data, Previous Uploads) and **Dashboards** (EHPL, Encalm Eats, Sky Plates).
+  - Icons: Lucide (`assets/icons/`) on sidebar links, tabs and page headers — upload, history, plane-takeoff, utensils, chef-hat; tabs use receipt/archive/target/plane/database, history/calendar-days/search/calendar-check, calendar/calendar-range, chart-column/upload. Pass `key=` to `st.tabs` and call `ui.tab_icons(key, [...])`.
 
 ---
 

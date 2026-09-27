@@ -20,9 +20,10 @@ bootstrap_session()
 render_user_badge()
 
 from modules import ui
-ui.page_header("Encalm Eats", "Encalm Eats outlet performance by location.")
+ui.page_header("Encalm Eats", "Encalm Eats outlet performance by location.", icon="utensils")
 
-tab_analytics, tab_dsr = st.tabs([":material/monitoring: Analytics", ":material/upload: Upload DSR"])
+tab_analytics, tab_dsr = st.tabs(["Analytics", "Upload DSR"], key="eats_tabs")
+ui.tab_icons("eats_tabs", ["chart-column", "upload"])
 
 # ---------------------------------------------------------------------------
 # Analytics tab

@@ -350,7 +350,13 @@ def render_user_badge() -> None:
         return
     with st.sidebar:
         st.divider()
-        st.caption(f":material/account_circle: Signed in as **{user}**")
+        from .ui import icon_html
+        import html as _html
+        st.markdown(
+            f'<div class="enc-user">{icon_html("circle-user")} Signed in as '
+            f"<b>{_html.escape(user)}</b></div>",
+            unsafe_allow_html=True,
+        )
         if st.button("Log out", key="_logout_button", use_container_width=True):
             logout()
             st.rerun()

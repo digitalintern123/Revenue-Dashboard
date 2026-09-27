@@ -984,6 +984,7 @@ def render_ehpl_page(page_key: str = "ehpl"):
         "Airport hospitality — Lounges, Spa, Nap & Shower, Atithya, "
         "Enwrap, Business Centre, RDC. "
         "PEN % = PAX / Terminal Traffic x 100.  SPP = Revenue / Terminal Traffic.",
+        icon="plane-takeoff",
     )
 
     location, ranges, current_df_all, compare_df_all, aop_df = \
@@ -1082,6 +1083,7 @@ def render_ehpl_page(page_key: str = "ehpl"):
 # Public: render_subsidiary_page (Encalm Eats / Sky Plates)
 # ---------------------------------------------------------------------------
 def render_subsidiary_page(segment: str, page_key: str, icon: str = ""):
+    """`icon` is a Lucide icon name (assets/icons) shown in the page header."""
     require_login()
     bootstrap_session()
     render_user_badge()
@@ -1090,6 +1092,7 @@ def render_subsidiary_page(segment: str, page_key: str, icon: str = ""):
         segment,
         f"{segment} performance by location and outlet. "
         "No airport terminal metrics shown for this business.",
+        icon=icon or None,
     )
 
     location, ranges, current_df_all, compare_df_all, aop_df = \

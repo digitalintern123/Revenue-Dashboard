@@ -21,14 +21,13 @@ bootstrap_session()
 render_user_badge()
 
 from modules import ui
-ui.page_header("Previous Uploads", "Upload history, what is stored in the database, and which date the dashboards open on.")
+ui.page_header("Previous Uploads", "Upload history, what is stored in the database, and which date the dashboards open on.", icon="history")
 
-tab_hist, tab_dates, tab_preview, tab_load = st.tabs([
-    ":material/history: Upload History",
-    ":material/calendar_month: Available Dates",
-    ":material/search: Preview Data",
-    ":material/event_available: Load Date",
-])
+tab_hist, tab_dates, tab_preview, tab_load = st.tabs(
+    ["Upload History", "Available Dates", "Preview Data", "Load Date"],
+    key="prev_tabs",
+)
+ui.tab_icons("prev_tabs", ["history", "calendar-days", "search", "calendar-check"])
 
 # ---------------------------------------------------------------------------
 # Upload History Table
@@ -99,7 +98,8 @@ with tab_preview:
 
     available_dates = cached_db.get_available_dates()
 
-    preview_tab1, preview_tab2 = st.tabs([":material/today: Single Date", ":material/date_range: Date Range"])
+    preview_tab1, preview_tab2 = st.tabs(["Single Date", "Date Range"], key="preview_tabs")
+    ui.tab_icons("preview_tabs", ["calendar", "calendar-range"])
 
     with preview_tab1:
         if not available_dates:
@@ -255,7 +255,7 @@ with tab_load:
         selected_date = date_picker.render_date_dropdown(
             available_dates, key_prefix="load_date", label="Date"
         )
-        if st.button("Load Selected Date", type="primary", icon=":material/event_available:"):
+        if st.button("Load Selected Date", type="primary"):
             set_active_date(selected_date)
             comparison_dates = database.find_comparison_dates(selected_date)
             nearest_compare = comparison_dates.get("yesterday")

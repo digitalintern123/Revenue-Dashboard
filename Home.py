@@ -37,11 +37,22 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-home    = st.Page("pages/Uploads.py",          title="Upload Data",      icon=":material/upload_file:", default=True)
-prev_up = st.Page("pages/Previous_Uploads.py", title="Previous Uploads", icon=":material/history:")
-ehpl    = st.Page("pages/EHPL.py",             title="EHPL",             icon=":material/flight_takeoff:")
-eats    = st.Page("pages/Encalm_Eats.py",      title="Encalm Eats",      icon=":material/restaurant:")
-sky     = st.Page("pages/Sky_Plates.py",       title="Sky Plates",       icon=":material/room_service:")
+home    = st.Page("pages/Uploads.py",          title="Upload Data",      url_path="upload", default=True)
+prev_up = st.Page("pages/Previous_Uploads.py", title="Previous Uploads", url_path="previous-uploads")
+ehpl    = st.Page("pages/EHPL.py",             title="EHPL",             url_path="ehpl")
+eats    = st.Page("pages/Encalm_Eats.py",      title="Encalm Eats",      url_path="encalm-eats")
+sky     = st.Page("pages/Sky_Plates.py",       title="Sky Plates",       url_path="sky-plates")
+
+# Lucide icons for the sidebar links (Streamlit's own `icon=` only takes
+# emoji / Material icons). Keys are the url_paths above; "" = default page.
+ui.sidebar_nav_icons({
+    "": "upload",
+    "upload": "upload",
+    "previous-uploads": "history",
+    "ehpl": "plane-takeoff",
+    "encalm-eats": "utensils",
+    "sky-plates": "chef-hat",
+})
 
 pg = st.navigation({"Data": [home, prev_up], "Dashboards": [ehpl, eats, sky]})
 pg.run()
