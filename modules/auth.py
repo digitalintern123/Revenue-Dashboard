@@ -175,11 +175,11 @@ def logout() -> None:
 def _login_brand() -> None:
     """Logo + heading shown above the sign-in form."""
     import base64
-    _svg = os.path.join(os.path.dirname(os.path.dirname(__file__)), "assets", "logo_on_light.svg")
+    from .ui import LOGO_STACKED
     img = ""
     try:
-        with open(_svg, "rb") as f:
-            img = f'<img src="data:image/svg+xml;base64,{base64.b64encode(f.read()).decode()}" alt="Encalm">'
+        with open(LOGO_STACKED, "rb") as f:
+            img = f'<img src="data:image/png;base64,{base64.b64encode(f.read()).decode()}" alt="Encalm">'
     except OSError:
         pass
     st.markdown(

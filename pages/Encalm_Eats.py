@@ -9,7 +9,8 @@ DSR upload tab: dedicated Encalm Eats Master DSR import.
 """
 import streamlit as st
 
-st.set_page_config(page_title="Encalm Eats", layout="wide")
+from modules import ui as _ui
+st.set_page_config(page_title="Encalm Eats", page_icon=_ui.LOGO_MARK, layout="wide")
 
 from modules.auth import require_login, render_user_badge
 from modules.session import bootstrap_session

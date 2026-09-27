@@ -110,7 +110,7 @@ def revenue_trend_line(daily: pd.DataFrame, title: str, highlight_date=None) -> 
     fig.add_scatter(
         x=daily["date"], y=daily["revenue"], mode="lines", name="Revenue",
         line=dict(color=COLORS["navy"], width=2),
-        fill="tozeroy", fillcolor="rgba(30,58,95,0.08)",
+        fill="tozeroy", fillcolor="rgba(20,34,72,0.07)",
         customdata=[format_money(v) for v in daily["revenue"]],
         hovertemplate="%{x|%d %b %Y}<br>%{customdata}<extra></extra>",
         showlegend=False,

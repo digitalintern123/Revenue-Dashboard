@@ -13,11 +13,13 @@
 - **Trend indicators:** `📈` (growth) / `📉` (decline) / `➡️` (stable) / `🆕` (new entrant)
 - **Colors:** Growth = `#0B7A57` (dark green) / Decline = `#B91C1C` (dark red) / Neutral = `#64748B`
 
-- **Visual style (2026 refresh):**
-  - Theme in `.streamlit/config.toml`: navy `#1E3A5F` primary, gold `#C9A227` accent, Deploy toolbar hidden (`toolbarMode = "minimal"`).
-  - Shared helpers in `modules/ui.py`: `inject_css()` (called once from `Home.py`), `page_header()`, `section()`, `summary_line()`, `COLORS`.
-  - Charts in `modules/charts.py` (Plotly): current period = navy, compare period = grey, legend + hover on every chart.
-  - Logo: `assets/logo.svg` wordmark; drop `assets/encalm_logo.png` in to use the real logo instead.
+- **Visual style (Encalm brand):**
+  - Colours sampled from the official logo: navy `#142248` (primary, sidebar, total rows), gold `#CBA578` (accents, KPI card top border, chart report-date marker), gold tint `#F3ECE1` (subtotal rows), darker gold `#8C6A3F` for gold text on white. Growth/decline green/red unchanged.
+  - Font: Montserrat (Google Fonts) for headings, KPI values, navigation and labels; tables use the default font.
+  - Theme in `.streamlit/config.toml`; Deploy toolbar hidden (`toolbarMode = "minimal"`).
+  - Shared helpers in `modules/ui.py`: `inject_css()` (called once from `Home.py`), `page_header()`, `section()`, `summary_line()`, `COLORS`, `LOGO_*` paths.
+  - Logos in `assets/` (see `assets/README.md`): stacked logo on sign-in, horizontal white lockup in the sidebar, petal mark as collapsed icon + favicon.
+  - Charts in `modules/charts.py` (Plotly): current period = navy, compare period = warm grey, legend + hover on every chart.
   - Dashboards (EHPL / Encalm Eats / Sky Plates): compact filter bar → summary line → Overview KPI cards → 2 charts → location tables.
   - Sidebar navigation is grouped: **Data** (Upload Data, Previous Uploads) and **Dashboards** (EHPL, Encalm Eats, Sky Plates).
 

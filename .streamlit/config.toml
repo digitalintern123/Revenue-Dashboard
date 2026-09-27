@@ -18,8 +18,8 @@ level = "error"
 toolbarMode = "minimal"
 
 [theme]
-primaryColor = "#1E3A5F"
+primaryColor = "#142248"
 backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#F4F6FA"
-textColor = "#1F2937"
+secondaryBackgroundColor = "#F6F3EE"
+textColor = "#1B2437"
 font = "sans serif"

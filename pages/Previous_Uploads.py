@@ -13,7 +13,8 @@ from modules.formatting import format_money, format_pax
 from modules.session import bootstrap_session, set_active_date, set_compare_date
 from modules.auth import require_login, render_user_badge
 
-st.set_page_config(page_title="Previous Uploads", page_icon="📂", layout="wide")
+from modules import ui as _ui
+st.set_page_config(page_title="Previous Uploads · Encalm", page_icon=_ui.LOGO_MARK, layout="wide")
 
 require_login()
 bootstrap_session()

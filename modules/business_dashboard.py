@@ -368,7 +368,7 @@ def _render_mis_table(rows: list[dict], cur_label: str, cmp_label: str, location
             if is_grand:
                 styles.append(
                     "font-weight: bold; border-top: 2px solid #ccc; "
-                    "background-color: #f0f4ff;"
+                    "background-color: #F3ECE1;"
                 )
             elif is_sub:
                 styles.append("font-weight: bold;")
@@ -795,8 +795,8 @@ def _render_subsidiary_table(
         for i in range(len(s)):
             if meta.iloc[i]["_is_grand"]:
                 styles.append(
-                    "font-weight: bold; background-color: #1e3a5f; "
-                    "color: white; border-top: 2px solid #0f2744;"
+                    "font-weight: bold; background-color: #142248; "
+                    "color: white; border-top: 2px solid #0C1530;"
                 )
             elif meta.iloc[i]["_is_subtotal"]:
                 styles.append("font-weight: bold;")

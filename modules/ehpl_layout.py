@@ -512,11 +512,11 @@ def _render_table(rows: list[dict], cur_label: str, cmp_label: str):
     def _row_style(row):
         rt = row_types[row.name]
         if rt == RT_GRAND:
-            s = ("font-weight: bold; background-color: #1e3a5f; "
-                 "color: white; border-top: 2px solid #0f2744;")
+            s = ("font-weight: bold; background-color: #142248; "
+                 "color: white; border-top: 2px solid #0C1530;")
         elif rt == RT_TOTAL:
-            s = ("font-weight: bold; background-color: #dbeafe; "
-                 "color: #1e40af; border-top: 1px solid #93c5fd;")
+            s = ("font-weight: bold; background-color: #F3ECE1; "
+                 "color: #142248; border-top: 1px solid #CBA578;")
         else:
             s = ""
         return [s] * len(row)

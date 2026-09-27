@@ -19,6 +19,7 @@ from modules import ui
 
 st.set_page_config(
     page_title="Encalm Revenue Analytics",
+    page_icon=ui.LOGO_MARK,
     layout="wide",
 )
 
