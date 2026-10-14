@@ -1274,6 +1274,8 @@ def save_dataframe_batched_v2(
         work["date"]          = pd.to_datetime(work["date"]).dt.strftime("%Y-%m-%d")
         for col in ("pax", "revenue", "aop", "traffic"):
             work[col] = pd.to_numeric(work.get(col, None), errors="coerce") if col in work.columns else None
+        work = combine_duplicate_revenue_rows(work, ["date", "outlet", "location"])
+        total = len(work)
         work["source_file"] = source_file
         work["uploaded_at"] = now_str
 
@@ -1401,6 +1403,48 @@ def _pg_copy_insert(df: pd.DataFrame, table: str, columns: list[str]) -> int:
             except: pass
 
 
+def combine_duplicate_revenue_rows(df: pd.DataFrame, keys: list) -> pd.DataFrame:
+    """
+    Collapse rows that share the same key into ONE row instead of dropping
+    all but one.
+
+    Revenue workbooks put month-end lines (fixed fees, rentals, card-billing
+    true-ups) on a second row with the same date + outlet as that day's
+    normal figures, and the finance pivot adds the two together. Several
+    raw outlet names also canonicalize to one outlet (e.g. Hyderabad
+    "Dom Prive" and "Prive"). Keeping only one of those rows silently lost
+    revenue, and which one survived depended on row order.
+
+      1. Exact duplicate rows (every column equal) are dropped first, so a
+         block pasted twice is not double counted.
+      2. Remaining rows with the same key are combined: pax / revenue / aop
+         are summed (NaN when every line is blank); traffic, an airport-wide
+         figure repeated on each line, takes the max; text columns keep the
+         value from the line with the most revenue.
+    """
+    if df is None or df.empty:
+        return df
+    work = df.drop_duplicates()
+    if not work.duplicated(subset=keys, keep=False).any():
+        return work.reset_index(drop=True)
+
+    sum_cols = [c for c in ("pax", "revenue", "aop") if c in work.columns]
+    for c in sum_cols + (["traffic"] if "traffic" in work.columns else []):
+        work[c] = pd.to_numeric(work[c], errors="coerce")
+    order = work["revenue"].fillna(0).abs() if "revenue" in work.columns else None
+    if order is not None:
+        work = work.assign(_ord=order).sort_values("_ord", ascending=False, kind="stable").drop(columns="_ord")
+
+    agg = {c: (lambda s: s.sum(min_count=1)) for c in sum_cols}
+    if "traffic" in work.columns:
+        agg["traffic"] = "max"
+    for c in work.columns:
+        if c not in keys and c not in agg:
+            agg[c] = "first"
+    out = work.groupby(keys, as_index=False, sort=False, dropna=False).agg(agg)
+    return out[[c for c in df.columns if c in out.columns]].reset_index(drop=True)
+
+
 def save_dataframe(
     df: pd.DataFrame,
     source_file: str,
@@ -1473,6 +1517,11 @@ def save_dataframe(
             work[col] = pd.to_numeric(work[col], errors="coerce")
         else:
             work[col] = None
+
+    # Lines that now share (date, outlet, location) — month-end second lines,
+    # or raw names that canonicalize to the same outlet — are added together
+    # rather than all but one being dropped by ON CONFLICT DO NOTHING.
+    work = combine_duplicate_revenue_rows(work, ["date", "outlet", "location"])
 
     # Attach the upload-context fields.
     work["source_file"]  = source_file
@@ -1612,6 +1661,33 @@ def delete_upload_by_filename(file_name: str) -> dict:
         )
         counts["upload_history"] = result.rowcount
     return counts
+
+
+def delete_aop_targets_for_months(year_months) -> int:
+    """
+    Delete every aop_target row whose (year, month) is in `year_months`.
+
+    Used by the AOP import's "replace" option: save_aop_targets() skips rows
+    whose key already exists (ON CONFLICT DO NOTHING), so a corrected AOP
+    file could never overwrite earlier values — including the LA22 rows an
+    older parser stored at 3x. Clearing the months a new file covers, once,
+    before saving, makes the new file authoritative for those months
+    regardless of what the earlier file was called.
+    Returns the number of rows deleted.
+    """
+    pairs = sorted({(int(y), int(m)) for y, m in year_months})
+    if not pairs:
+        return 0
+    deleted = 0
+    with ENGINE.begin() as conn:
+        for y, m in pairs:
+            result = conn.execute(
+                AOPTarget.__table__.delete().where(
+                    (AOPTarget.year == y) & (AOPTarget.month == m)
+                )
+            )
+            deleted += result.rowcount or 0
+    return deleted
 
 
 def _to_date(value) -> dt.date:

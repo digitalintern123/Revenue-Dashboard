@@ -18,9 +18,6 @@ venv/
 *.log
 logs/
 
-# Test files — keep out of production deployments
-test_*.py
-tests/
 
 # OS files
 .DS_Store

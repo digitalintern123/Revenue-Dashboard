@@ -776,7 +776,9 @@ def parse_revenue_dashboard(
     df = df[(df["segment"] != "") & (df["segment"].str.lower() != "nan")]
     df = df[(df["outlet"] != "") & (df["outlet"].str.lower() != "nan")]
     df = df[(df["location"] != "") & (df["location"].str.lower() != "nan")]
-    df = df.drop_duplicates(subset=["date", "segment", "outlet", "location"], keep="last")
+    # Exact repeats only — same-key lines with different values (month-end
+    # adjustments) are combined later in data_processor._validate_and_clean.
+    df = df.drop_duplicates()
     df = df.reset_index(drop=True)
 
     if df.empty:
@@ -836,7 +838,8 @@ def parse_generic_excel(file_obj, sheet_name: Optional[str] = None) -> pd.DataFr
 
     df = df.dropna(subset=["date"])
     df = df[df["revenue"].notna()]
-    df = df.drop_duplicates(subset=["date", "segment", "outlet", "location"], keep="last")
+    # Exact repeats only — same-key lines are combined in _validate_and_clean.
+    df = df.drop_duplicates()
     df = df.reset_index(drop=True)
 
     if df.empty:

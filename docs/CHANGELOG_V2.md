@@ -1,5 +1,56 @@
 # Encalm Analytics — v2 Release Notes
 
+## Version 2.6.0 (October 2026) — hosting, Encalm branding, speed
+
+- **Render hosting**: `render.yaml` blueprint; login settings come from a Render
+  Secret File (`secrets.toml`). `DATABASE_URL` accepts pasted variants (psql
+  snippet, quotes, `postgres://`) and pins the psycopg2 driver; pooled Neon hosts
+  skip the `statement_timeout` startup option. Errors name the bad source without
+  showing the password.
+- **Encalm branding**: official logo (sidebar, sign-in, favicon), navy `#142248` /
+  gold `#CBA578`, Montserrat headings, Lucide icons on pages and tabs.
+- **Dashboards**: compact filter bar with a period summary line, Overview KPI
+  cards (now also on EHPL) and two charts (revenue by location/outlet, 30-day
+  trend). Upload Data and Previous Uploads are split into tabs.
+- **Speed**: render-path reads are cached for 10 minutes and cleared by every
+  upload; schema check once per server; login re-validated at most once a
+  minute. A click on EHPL went from ~20 database queries to none.
+- Previous Uploads preview shows one AOP column (was `aop_x`/`aop_y`).
+- Tests (`tests/`, `test_universal_parser.py`) are now tracked in git.
+
+## Version 2.5.0 (October 2026) — no more dropped month-end lines
+
+- **Repeated date + outlet lines are now added together** instead of keeping only
+  the last one. Revenue workbooks carry month-end lines (fixed fees, rentals,
+  card-billing true-ups) on a second row for the same date and outlet; the old
+  importer kept one row and dropped the other (₹7.4 L lost on 31 Aug 2026,
+  ₹2.04 Cr would have been lost on 30 Sep 2026). Exact repeated rows are still
+  removed so a block pasted twice is not double counted.
+- Raw outlet names that map to the same outlet (e.g. Hyderabad "Dom Prive" and
+  "Prive") are combined at save time too, instead of whichever row came first
+  winning.
+- `.streamlit/config.toml` now runs Streamlit headless (no first-run email prompt).
+- The release zip no longer contains `.streamlit/secrets.toml`, so deploying can't
+  overwrite the server's login settings or database connection.
+
+## Version 2.4.0 (September 2026) — AOP master: full coverage
+
+- **Sky Plates & Encalm Eats AOP** now imported from the AOP master's IFK and F&B
+  rows (`modules/eats_skyplates_aop_parser.py`). The reader finds rows by their
+  labels, reads both FY25-26 and FY26-27 monthly blocks, stores outlet-level
+  targets only (no subtotal rows), and reports any section whose total differs
+  from its outlets. Events & ODCs ("All") is stored under Delhi.
+- **LA22 AOP was stored at 3×** (three alias names collapsed onto one outlet and
+  were summed). Now written once.
+- **EHPL AOP now covers Bhogapuram** (card lounges, M&G, Porter, Baggage Wrap) and
+  Delhi's MLCP Nap & Shower unit. Parsed EHPL AOP reconciles exactly to the
+  sheet's EHPL total row for every month.
+- **AOP import "Replace" option** (on by default) clears stored AOP for the months
+  a file covers before importing, so corrected files overwrite old values.
+- Sky Plates / Encalm Eats pages show AOP Target and Variance in the KPI cards and
+  tables, prorated per month for partial ranges; AOP for planned outlets with no
+  sales appears as one "Other planned outlets" line plus a detail expander.
+
 ## Version 2.0.0 (August 2026)
 
 This release fixes all audit issues identified in the Production Readiness Audit

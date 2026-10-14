@@ -114,6 +114,14 @@ def get_db_stats() -> dict:
     return database.get_db_stats()
 
 
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def load_segment_aop(segment: str, start_date: dt.date, end_date: dt.date,
+                     location: str | None = None) -> pd.DataFrame:
+    """Cached: prorated Sky Plates / Encalm Eats AOP (eats_skyplates_aop_parser)."""
+    from .eats_skyplates_aop_parser import load_segment_aop as _load
+    return _load(segment, start_date, end_date, location=location)
+
+
 def _cached_traffic_totals(start_date, end_date, location=None):
     return get_traffic_total_for_range(start_date, end_date, location)
 
@@ -129,7 +137,7 @@ _ALL_CACHED = (
     get_traffic_total_for_range, get_available_traffic_dates,
     get_available_week_starts, get_available_year_months, get_available_years,
     load_encalm_eats_dsr_for_range, get_encalm_eats_dsr_dates,
-    get_upload_history, get_dates_summary, get_db_stats,
+    get_upload_history, get_dates_summary, get_db_stats, load_segment_aop,
 )
 
 
