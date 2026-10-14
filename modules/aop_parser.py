@@ -42,10 +42,12 @@ explicit confirmation, since the source file's own row layout duplicates
 these across multiple rows per location (and even includes a redundant
 plain "M&G" row alongside "M&G Del"/"M&G Hyd"/"M&G Goa").
 
-SCOPE: only Delhi/Hyderabad/Goa rows under Business Segment
-Lounge/SPA/Atithya/Others are imported (these map onto the app's existing
-EHPL business unit structure). Bhogapuram and segments like IFK/F&B/Hotel/
-Nap & Shower are explicitly out of scope for this importer — see
+SCOPE: Delhi/Hyderabad/Goa/Bhogapuram rows under Business Segment
+Lounge/SPA/Atithya/Others (plus Bhogapuram's M&G/Porter/Baggage Wrap labels
+and Delhi's MLCP Nap & Shower unit) are imported — together these reconcile
+exactly to the sheet's EHPL total row (Delhi+Hyd+Goa+MLCP+BPM+Amex Hyd).
+IFK and F&B are imported by eats_skyplates_aop_parser; Hotel rows are out of
+scope for this importer — see
 get_skipped_rows_report() to see exactly what was excluded and why,
 rather than have it silently vanish.
 
@@ -73,13 +75,21 @@ _BUSINESS_SEGMENT_TO_UNIT = {
     "spa": "Lounges",
     "atithya": "Atithya",
     "others": "Others",
+    # Bhogapuram rows use their own segment labels instead of Atithya/Others
+    "m&g": "Atithya",
+    "porter": "Atithya",
+    "baggage wrap": "Others",
+    # Delhi MLCP (multilevel parking T3) nap & shower unit sits in EHPL total
+    "nap & shower": "Lounges",
 }
 
-_IN_SCOPE_LOCATIONS = {"delhi", "del", "hyd", "hyderabad", "goa", "gox", "goi"}
+_IN_SCOPE_LOCATIONS = {"delhi", "del", "hyd", "hyderabad", "goa", "gox", "goi",
+                        "bhogapuram", "bpm", "vtz"}
 _LOCATION_NORMALIZATION = {
     "delhi": "Delhi", "del": "Delhi",
     "hyd": "Hyderabad", "hyderabad": "Hyderabad",
     "goa": "Goa", "gox": "Goa", "goi": "Goa",
+    "bhogapuram": "Bhogapuram", "bpm": "Bhogapuram", "vtz": "Bhogapuram",
 }
 
 _COMBINE_INTO_TARGET = {
@@ -95,6 +105,7 @@ _COMBINE_INTO_TARGET = {
 # These are subtotal rows in the AOP file — skip them to avoid double-counting
 _AOP_SUBTOTAL_UNIT_IDS = frozenset([
     "M&G Del", "M&G Goa",   # Delhi and Goa subtotals only; M&G Hyd is NOT a subtotal
+    "M&G (Inc Porter)",     # Bhogapuram subtotal = M&G + Porter rows below it
 ])
 
 # Standalone Porter and Buggy outlet name normalization
@@ -107,6 +118,8 @@ _AOP_ATITHYA_MAP = {
     ("Goa",       "Porter Goa"):  "Porter",
     ("Goa",       "Buggy Goa"):   "Buggy",
     ("Goa",       "GAT"):         "Atithya",   # Goa: GAT = Meet & Greet / Atithya
+    ("Bhogapuram", "M&G"):        "Atithya",
+    ("Bhogapuram", "Porter"):     "Porter",
 }
 
 _AOP_OUTLET_MAP = {
@@ -149,6 +162,10 @@ _AOP_OUTLET_MAP = {
     ("Goa", "CIP Lounge Goa"): "CIP Lounge",
     ("Goa", "RL Goa"): "Reserved Lounge",
     ("Goa", "Baggage Wrapping Goa"): "Baggage Wrapping",
+    ("Delhi", "MLCP, multilevel parking T3"): "MLCP",
+    ("Bhogapuram", "International Card Lounge"): "International Lounge",
+    ("Bhogapuram", "Domestic Card Lounge"): "Domestic Lounge",
+    ("Bhogapuram", "Baggage Wrap"): "Baggage Wrapping",
 }
 
 _ALIAS_GROUPS = {
@@ -295,7 +312,7 @@ def parse_outlet_monthly_aop(file_obj, sheet_name: Optional[str] = None) -> dict
         if location_key not in _IN_SCOPE_LOCATIONS:
             skipped_records.append(
                 {"row_number": row_idx + 1, "location": geo_raw, "business_segment": biz_raw,
-                 "unit_id": unit_id, "reason": "Out-of-scope location (not Delhi/Hyderabad/Goa)."}
+                 "unit_id": unit_id, "reason": "Out-of-scope location (not Delhi/Hyderabad/Goa/Bhogapuram)."}
             )
             continue
         location = _LOCATION_NORMALIZATION[location_key]
@@ -305,7 +322,11 @@ def parse_outlet_monthly_aop(file_obj, sheet_name: Optional[str] = None) -> dict
         if business_unit is None:
             skipped_records.append(
                 {"row_number": row_idx + 1, "location": location, "business_segment": biz_raw,
-                 "unit_id": unit_id, "reason": f"Out-of-scope business segment '{biz_raw}'."}
+                 "unit_id": unit_id,
+                 "reason": ("Imported separately as Sky Plates / Encalm Eats AOP "
+                            "(eats_skyplates_aop_parser)."
+                            if business_segment_key in ("ifk", "f&b")
+                            else f"Out-of-scope business segment '{biz_raw}'.")}
             )
             continue
 
@@ -335,7 +356,11 @@ def parse_outlet_monthly_aop(file_obj, sheet_name: Optional[str] = None) -> dict
 
         alias_key = (location, unit_id)
         if alias_key in _ALIAS_GROUPS:
-            for alias_outlet in _ALIAS_GROUPS[alias_key]:
+            # Write the target ONCE. Every alias canonicalizes to the same
+            # outlet name at save time (canonicalize_outlet_name), and
+            # save_aop_targets sums rows sharing a key — writing all three
+            # aliases stored LA22 at 3x its real target.
+            for alias_outlet in _ALIAS_GROUPS[alias_key][:1]:
                 for (y, m), val in monthly_values.items():
                     if val is None:
                         continue

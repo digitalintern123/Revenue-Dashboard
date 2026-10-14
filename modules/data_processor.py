@@ -1128,6 +1128,8 @@ def _validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     # A row with neither PAX nor Revenue carries no information — drop it.
     df = df[~(df["pax"].isna() & df["revenue"].isna())]
 
-    df = df.drop_duplicates(subset=["date", "segment", "outlet", "location"], keep="last")
+    # Same date/segment/outlet/location on more than one line = month-end
+    # adjustment lines; add them together (see database.combine_duplicate_revenue_rows).
+    df = database.combine_duplicate_revenue_rows(df, ["date", "segment", "outlet", "location"])
     df = df.reset_index(drop=True)
     return df

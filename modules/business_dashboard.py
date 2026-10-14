@@ -737,6 +737,30 @@ def _render_subsidiary_table(
         st.info(f"No {segment} outlet data for {location_label} in this period.")
         return
 
+    # AOP for planned outlets that had no sales in this period (not yet open,
+    # or not reported in the DSR under that name). Shown as one line so the
+    # table's AOP total equals the location AOP in the KPI cards.
+    _unmatched_aop: dict = {}
+    if aop_map:
+        sold = {str(r["Performance"]).strip() for r in rows}
+        unmatched = {o: v for o, v in aop_map.items() if o not in sold and v}
+        if unmatched:
+            other_aop = float(sum(unmatched.values()))
+            r = {
+                "Performance":  f"  Other planned outlets – no sales ({len(unmatched)})",
+                "_is_subtotal": False,
+                "_is_grand":    False,
+                f"PAX ({cur_label})": "—",
+                "PAX Chg %": "—",
+                f"Rev ({cur_label})": "—",
+                "Rev Chg %": "—",
+                "AOP Target": format_money(other_aop),
+                "AOP Var %": "—",
+            }
+            rows.append(r)
+            totals["aop"] += other_aop
+            _unmatched_aop = unmatched
+
     # Total row — built from accumulated totals, placed at TOP
     t_rev_chg = ra.pct_change(totals["cur_rev"], totals["cmp_rev"] or None)
     t_pax_chg = ra.pct_change(totals["cur_pax"], totals["cmp_pax"] or None)
@@ -761,6 +785,9 @@ def _render_subsidiary_table(
     rows = [total_row] + rows
 
     display_df = pd.DataFrame(rows)
+    for _c in ("AOP Target", "AOP Var %"):
+        if _c in display_df.columns:
+            display_df[_c] = display_df[_c].fillna("—")
     meta_cols  = ["_is_subtotal", "_is_grand"]
 
     # Enforce explicit column order matching EHPL:
@@ -822,6 +849,16 @@ def _render_subsidiary_table(
         },
         column_order=show_cols,
     )
+
+    if _unmatched_aop:
+        with st.expander(f"Planned outlets with AOP but no sales — {location_label}"):
+            st.dataframe(
+                pd.DataFrame(
+                    [{"Outlet": o, "AOP Target": format_money(v)}
+                     for o, v in sorted(_unmatched_aop.items(), key=lambda kv: -kv[1])]
+                ),
+                use_container_width=True, hide_index=True,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1056,13 +1093,23 @@ def render_subsidiary_page(segment: str, page_key: str, icon: str = ""):
         st.warning(f"No {segment} data for {location} in the selected period.")
         st.stop()
 
-    # AOP is not applicable for Encalm Eats / Sky Plates — pass None throughout.
-    aop_df_loc = None
+    # ── AOP targets for this segment (imported by eats_skyplates_aop_parser) ──
+    # Rows are outlet-level with no subtotal rows, so summing is safe; each
+    # month in the range is prorated by the days selected in that month.
+    from modules.eats_skyplates_aop_parser import load_segment_aop, align_aop_to_outlets
 
-    # KPI cards (no traffic, no AOP for non-airport segments)
+    def _get_aop_for_loc(loc_name: str) -> pd.DataFrame | None:
+        df_aop = load_segment_aop(segment, ranges["current_start"], ranges["current_end"],
+                                  location=loc_name)
+        return df_aop if not df_aop.empty else None
+
+    aop_df_all_seg = _get_aop_for_loc("All Locations") if location == "All Locations" else None
+    aop_df_loc = _get_aop_for_loc(location) if location != "All Locations" else aop_df_all_seg
+
+    # KPI cards (no traffic, but AOP now supported for these segments)
     _render_kpi_cards(
         seg_cur, seg_cmp if not seg_cmp.empty else None,
-        None, cur_label, cmp_label, show_traffic=False
+        aop_df_loc, cur_label, cmp_label, show_traffic=False
     )
     st.divider()
 
@@ -1075,9 +1122,10 @@ def render_subsidiary_page(segment: str, page_key: str, icon: str = ""):
                 seg_cmp if not seg_cmp.empty else None
             )
 
+        aop_for_loc = align_aop_to_outlets(_get_aop_for_loc(loc_name), df_c)
         st.markdown(f"**{loc_name}**")
         _render_subsidiary_table(
-            segment, loc_name, df_c, df_p, None, cur_label, cmp_label
+            segment, loc_name, df_c, df_p, aop_for_loc, cur_label, cmp_label
         )
 
     if location == "All Locations":
@@ -1102,5 +1150,5 @@ def render_subsidiary_page(segment: str, page_key: str, icon: str = ""):
         _render_subsidiary_table(
             segment, location, seg_cur,
             seg_cmp if not seg_cmp.empty else None,
-            None, cur_label, cmp_label
+            align_aop_to_outlets(aop_df_loc, seg_cur), cur_label, cmp_label
         )

@@ -202,8 +202,17 @@ if aop_files:
                     index=default_idx, format_func=lambda s: labels[s],
                     key=f"up_aop_sheet_{i}")
 
+aop_replace = st.checkbox(
+    "Replace existing AOP for the months in this file",
+    value=True, key="up_aop_replace",
+    help=("Clears stored monthly AOP targets for every month this file covers, then "
+          "imports the file. Without this, rows that already exist are kept unchanged, "
+          "so a corrected AOP file cannot update earlier values."),
+)
+
 if st.button("📥 Import AOP Targets", disabled=not aop_chosen_sheets):
     from modules import aop_parser
+    from modules import eats_skyplates_aop_parser as _esp_parser
     pending_aop = []
     for aop_file in aop_files:
         sheet = aop_chosen_sheets.get(aop_file.name)
@@ -214,15 +223,59 @@ if st.button("📥 Import AOP Targets", disabled=not aop_chosen_sheets):
         with st.spinner(f"⏳ Importing '{aop_file.name}'…"):
             try:
                 parsed = aop_parser.parse_aop_auto(aop_file, sheet_name=sheet)
-                if parsed["format"] in ("outlet_monthly","daily_outlet_pivot"):
+                is_monthly = parsed["format"] in ("outlet_monthly","daily_outlet_pivot")
+
+                # Sky Plates (IFK) + Encalm Eats (F&B) rows from the same master file
+                esp, esp_error = None, None
+                if parsed["format"] == "outlet_monthly":
+                    try:
+                        if hasattr(aop_file, "seek"):
+                            aop_file.seek(0)
+                        esp = _esp_parser.parse_eats_and_skyplates_aop(aop_file)
+                    except Exception as esp_exc:
+                        esp_error = str(esp_exc)
+
+                deleted = 0
+                if is_monthly and aop_replace:
+                    months = set(zip(parsed["aop_rows"]["year"], parsed["aop_rows"]["month"]))
+                    if esp is not None and not esp["aop_rows"].empty:
+                        months |= set(zip(esp["aop_rows"]["year"], esp["aop_rows"]["month"]))
+                    deleted = database.delete_aop_targets_for_months(months)
+
+                if is_monthly:
                     sr = database.save_aop_targets(parsed["aop_rows"], aop_file.name)
                 else:
                     sr = database.save_aop_targets_daily(parsed["aop_rows"], aop_file.name)
-                pending_aop.append({"success":True,"file_name":aop_file.name,
-                    "inserted":sr["inserted"],"skipped":sr["skipped"],
-                    "rows_parsed":len(parsed["aop_rows"]),
-                    "units_multiplier":parsed["units_multiplier"],
-                    "skipped_rows":parsed["skipped_rows"],"aop_rows":parsed["aop_rows"]})
+
+                esp_saved = None
+                if esp is not None:
+                    esp_saved = _esp_parser.save_eats_skyplates_aop(
+                        None, source_file=aop_file.name, parsed=esp)
+
+                extra = [
+                    f"**EHPL AOP rows parsed:** {len(parsed['aop_rows']):,}",
+                    f"**Units:** ×{parsed['units_multiplier']:,.0f}",
+                ]
+                if deleted:
+                    extra.append(f"**Replaced:** {deleted:,} earlier AOP rows for the same months")
+                if esp_saved:
+                    extra.append(
+                        f"**Sky Plates AOP rows:** {esp_saved['sky_plates_count']:,} · "
+                        f"**Encalm Eats AOP rows:** {esp_saved['encalm_eats_count']:,} "
+                        f"(saved {esp_saved['db_inserted']:,})")
+                elif esp_error:
+                    extra.append(f"⚠️ Sky Plates / Encalm Eats AOP not imported: {esp_error}")
+
+                pending_aop.append({
+                    "success": True, "file_name": aop_file.name,
+                    "inserted": sr["inserted"], "skipped": sr["skipped"],
+                    "rows_parsed": len(parsed["aop_rows"]),
+                    "units_multiplier": parsed["units_multiplier"],
+                    "skipped_rows": parsed["skipped_rows"],
+                    "extra_lines": extra,
+                    "esp_mapping": esp["mapping"] if esp else None,
+                    "esp_warnings": esp["warnings"] if esp else [],
+                })
             except Exception as exc:
                 pending_aop.append({"success":False,"file_name":aop_file.name,
                     "message":str(exc),"stage":"saving"})
@@ -234,10 +287,25 @@ if "_up_aop_results" in st.session_state:
         if _ar["success"]:
             upload_status.render_result(True, _ar["file_name"], "",
                 inserted=_ar["inserted"], skipped=_ar["skipped"],
-                extra_lines=[f"**Rows parsed:** {_ar['rows_parsed']:,}",
-                             f"**Units:** ×{_ar['units_multiplier']:,.0f}"])
+                extra_lines=_ar.get("extra_lines", [
+                    f"**Rows parsed:** {_ar['rows_parsed']:,}",
+                    f"**Units:** ×{_ar['units_multiplier']:,.0f}",
+                ]))
+            for _w in _ar.get("esp_warnings") or []:
+                st.warning(_w)
+            _map = _ar.get("esp_mapping")
+            if _map is not None and not _map.empty:
+                _n_unmatched = int((_map["matched_to_dsr"] == False).sum())
+                with st.expander(f"🍽️ Sky Plates / Encalm Eats outlet mapping "
+                                 f"({len(_map)} AOP rows, {_n_unmatched} with no DSR outlet)"):
+                    _show = _map.rename(columns={
+                        "segment": "Segment", "location": "Location", "section": "Section",
+                        "aop_name": "AOP name", "dashboard_outlet": "Dashboard outlet",
+                        "matched_to_dsr": "Matches DSR outlet", "note": "Note in AOP file",
+                        "fy26_27_lakhs": "FY26-27 (₹ L)", "excel_row": "Excel row"})
+                    st.dataframe(_show, use_container_width=True, hide_index=True)
             if not _ar["skipped_rows"].empty:
-                with st.expander(f"⚠️ {len(_ar['skipped_rows'])} out-of-scope rows"):
+                with st.expander(f"ℹ️ {len(_ar['skipped_rows'])} rows not imported as EHPL AOP"):
                     st.dataframe(_ar["skipped_rows"], use_container_width=True, hide_index=True)
         else:
             upload_status.render_result(False, _ar["file_name"], _ar["message"],

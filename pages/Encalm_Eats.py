@@ -127,11 +127,21 @@ with tab_analytics:
     else:
         st.caption(data_source_note)
 
+        # ── Encalm Eats AOP (F&B rows of the AOP master, outlet level) ──────
+        from modules.eats_skyplates_aop_parser import load_segment_aop, align_aop_to_outlets
+
+        def _get_eats_aop(loc_name: str) -> pd.DataFrame | None:
+            df_aop = load_segment_aop("Encalm Eats", ranges["current_start"],
+                                      ranges["current_end"], location=loc_name)
+            return df_aop if not df_aop.empty else None
+
+        aop_for_kpi = _get_eats_aop(location)
+
         # KPI cards — use revenue/pax column names
         _render_kpi_cards(
             seg_cur.rename(columns={"revenue": "revenue", "pax": "pax"}),
             seg_cmp if not seg_cmp.empty else None,
-            None, cur_label, cmp_label, show_traffic=False,
+            aop_for_kpi, cur_label, cmp_label, show_traffic=False,
         )
         st.divider()
 
@@ -145,9 +155,10 @@ with tab_analytics:
                 df_c = seg_cur
                 df_p = seg_cmp if not seg_cmp.empty else None
 
+            aop_loc = align_aop_to_outlets(_get_eats_aop(loc_name), df_c)
             st.markdown(f"**{loc_name}**")
             _render_subsidiary_table(
-                segment, loc_name, df_c, df_p, None, cur_label, cmp_label
+                segment, loc_name, df_c, df_p, aop_loc, cur_label, cmp_label
             )
 
         if location == "All Locations":
