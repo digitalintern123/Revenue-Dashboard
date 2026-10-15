@@ -14,7 +14,7 @@ A Streamlit web app for Encalm Group's airport businesses.
   1.60), pandas, SQLAlchemy 2, Plotly, openpyxl / pdfplumber
 - **Database:** SQLite by default (`data/revenue_analytics.db`), PostgreSQL
   when `DATABASE_URL` is set
-- **Tests:** 272 (`python -m pytest tests -q`)
+- **Tests:** 273 (`python -m pytest tests -q`)
 - **Live:** Windows VPS behind IIS — see [SERVER_RUNBOOK.md](SERVER_RUNBOOK.md)
 
 ## 2. Business context
@@ -121,4 +121,4 @@ served by Streamlit's file-based routing, unstyled.
 
 `tests/unit` (parsers, KPI maths, EHPL line items, rows-not-imported, auth),
 `tests/integration` (database), `tests/smoke` (every module imports).
-`conftest.py` mocks Streamlit where needed. All 272 must pass before pushing.
+`conftest.py` mocks Streamlit where needed. All 273 must pass before pushing.

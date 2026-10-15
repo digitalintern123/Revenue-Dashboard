@@ -133,3 +133,29 @@ def test_hyd_layout_reads_pax_not_flights(measures):
     t = _totals(tp.parse_traffic_auto(buf, "apr.xlsx"))
     assert t[("Hyderabad", "Domestic")] == 300 * DAYS
     assert t[("Hyderabad", "International")] == 30 * DAYS
+
+
+def test_goa_two_month_blocks_keeps_only_current_month():
+    """Jul-26 Goa sheet: left block = July 2025 (daily figures), right block
+    = July 2026. Only July 2026 is traffic for this file, and the two blocks
+    must never be added together."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Gox Traffic July 25 July26"
+    block_head = [["Domestic", None, None, None, None, "International", None, None, None],
+                  ["Date", "PAX", None, "Flights", None, "PAX", None, "Flights", None],
+                  [None, "Arrival", "Departure", "Arrival", "Departure", "Arrival", "Departure", "Arrival", "Departure"]]
+    ws.append([dt.datetime(2025, 7, 25)] + [None] * 9 + [dt.datetime(2026, 7, 1)])
+    for h in block_head:
+        ws.append(h + [None] + h)
+    for d in range(1, DAYS + 1):
+        left = [dt.datetime(2025, 7, d), 1000, 1000, 9, 9, 50, 50, 1, 1]
+        right = [dt.datetime(2026, 7, d), 300, 400, 3, 3, 20, 30, 1, 1]
+        ws.append(left + [None] + right)
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    df = tp.parse_traffic_auto(buf, "jul.xlsx")
+    goa = df[df["location"] == "Goa"]
+    assert {(d.year, d.month) for d in goa["date"]} == {(2026, 7)}
+    t = _totals(goa)
+    assert t[("Goa", "Domestic")] == 700 * DAYS
+    assert t[("Goa", "International")] == 50 * DAYS

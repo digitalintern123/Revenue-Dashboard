@@ -232,6 +232,7 @@ def parse_traffic_auto(file_obj, source_file: str = "traffic.xlsx") -> pd.DataFr
     # for multiple airports in different formats (e.g. DEL as cross-tab,
     # HYD as side-by-side Domestic/International, GOA as dom/intl PAX grid).
     all_parts = []
+    dom_intl_result = hyd_result = goa_result = None
 
     try:
         cross_tab_result = parse_cross_tab_auto(file_obj, source_file)
@@ -276,6 +277,21 @@ def parse_traffic_auto(file_obj, source_file: str = "traffic.xlsx") -> pd.DataFr
             all_parts.append(flat_result)
     except Exception:
         pass
+
+    # The dedicated side-by-side readers know their airport's layout (Goa:
+    # keep only the later of the two month blocks). The generic
+    # Domestic/International reader can misread those sheets — on a Goa
+    # sheet with a daily prior-year block it adds both blocks' columns and
+    # dates them in the prior year — so it gives way for those airports.
+    if all_parts and dom_intl_result is not None and not dom_intl_result.empty:
+        owned = set()
+        for part in (hyd_result, goa_result):
+            if part is not None and not part.empty:
+                owned |= set(part["location"].astype(str))
+        if owned:
+            keep = dom_intl_result[~dom_intl_result["location"].astype(str).isin(owned)]
+            all_parts = [keep if p is dom_intl_result else p for p in all_parts]
+            all_parts = [p for p in all_parts if not p.empty]
 
     if all_parts:
         combined = pd.concat(all_parts, ignore_index=True)

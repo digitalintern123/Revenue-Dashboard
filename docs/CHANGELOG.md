@@ -86,13 +86,18 @@ names and file paths in them may no longer exist).
   Flights Arr/Dep per side) the Flights columns were read as traffic (April:
   Domestic 13,399 / International 1,765 instead of 20,66,956 / 3,42,714).
   Columns under a Flights / ATMs heading are now ignored.
+- **Goa two-month sheets:** when the prior-year block (left) has daily
+  figures (Jul-2026 file), a generic reader added both blocks together and
+  stored them as July 2025 (e.g. 1 Jul 2025 = 19,334 instead of 12,163).
+  Airports read by the dedicated Goa / Hyderabad readers now ignore the
+  generic reader, so only the current month (July 2026) is imported.
 - **Replace on traffic import** (on by default): a corrected file overwrites
   stored traffic for its airports and dates; before, re-uploads were skipped.
 
 ### Docs
 - Documentation rewritten for the current app; new
   [USER_GUIDE.md](USER_GUIDE.md) and [SERVER_RUNBOOK.md](SERVER_RUNBOOK.md).
-  Tests: 272.
+  Tests: 273.
 
 ## Version 2.6.0 (October 2026) — hosting, Encalm branding, speed
 
