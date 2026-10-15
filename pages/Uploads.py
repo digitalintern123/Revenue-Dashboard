@@ -141,7 +141,8 @@ with tab_hist:
                     message=(f"Parsed {len(result.df):,} rows. "
                              f"{save_result['inserted']:,} new, {save_result['skipped']:,} skipped."),
                     df=result.df, report_date=result.report_date,
-                    inserted=save_result["inserted"], skipped=save_result["skipped"])
+                    inserted=save_result["inserted"], skipped=save_result["skipped"],
+                    warnings=result.warnings, skipped_rows=result.skipped_rows)
             except Exception as _exc:
                 _prog.empty()
                 result = data_processor.ProcessResult(

@@ -17,6 +17,7 @@ from typing import Optional
 import pandas as pd
 
 from . import aop_parser, database, excel_parser, pdf_parser, traffic_parser, universal_parser
+from . import import_report as _import_report
 
 REQUIRED_COLUMNS = ["date", "segment", "outlet", "location", "pax", "revenue"]
 
@@ -36,6 +37,9 @@ class ProcessResult:
     inserted: int = 0
     skipped: int = 0
     warnings: list[str] = field(default_factory=list)
+    # Rows not imported (or imported without a figure), with source row and
+    # reason — see modules/import_report.py. Empty when everything imported.
+    skipped_rows: Optional[pd.DataFrame] = None
 
 
 def detect_file_type(file_name: str) -> str:
@@ -376,12 +380,18 @@ def process_uploaded_file(
             success=False, file_name=file_name, stage="validation",
             message=f"File '{file_name}' has {len(df):,} rows — max allowed is {_MAX_ROWS:,}. Split into smaller files."
         )
-    df = _validate_and_clean(df)
+    df, skipped_report = _validate_and_clean_with_report(df)
+    if not skipped_report.empty:
+        warnings.append(
+            f"{len(skipped_report):,} row(s) were not imported or imported incompletely — "
+            "see the 'Rows not imported' table for the Excel row and reason."
+        )
     if df.empty:
         return ProcessResult(
             success=False,
             file_name=file_name,
             stage="validating",
+            skipped_rows=skipped_report,
             message=(
                 f"'{file_name}' was read, but contained no usable revenue rows after "
                 f"validation — check that it has the expected columns (Date, Segment/"
@@ -389,7 +399,8 @@ def process_uploaded_file(
             ),
         )
 
-    report_date = df["date"].iloc[0] if "date" in df.columns and not df.empty else None
+    # Latest date in the file (a multi-day workbook's first row can be any day).
+    report_date = max(df["date"]) if "date" in df.columns and not df.empty else None
     total_revenue = float(pd.to_numeric(df["revenue"], errors="coerce").sum())
     total_pax = float(pd.to_numeric(df["pax"], errors="coerce").sum())
 
@@ -478,6 +489,7 @@ def process_uploaded_file(
         inserted=inserted,
         skipped=skipped,
         warnings=warnings,
+        skipped_rows=skipped_report,
     )
 
 
@@ -767,7 +779,7 @@ def _process_with_ingestion_layer(
 
     # Pass through the same validate-and-clean step every other parser uses.
     try:
-        df = _validate_and_clean(result.df)
+        df, skipped_report = _validate_and_clean_with_report(result.df)
     except ValueError as exc:
         return ProcessResult(
             success=False, file_name=file_name, stage="validating",
@@ -783,7 +795,7 @@ def _process_with_ingestion_layer(
             ),
         )
 
-    report_date  = df["date"].iloc[0] if "date" in df.columns and not df.empty else None
+    report_date  = max(df["date"]) if "date" in df.columns and not df.empty else None
     total_revenue = float(pd.to_numeric(df["revenue"], errors="coerce").sum())
     total_pax     = float(pd.to_numeric(df["pax"],     errors="coerce").sum())
 
@@ -823,6 +835,7 @@ def _process_with_ingestion_layer(
         inserted=inserted,
         skipped=skipped,
         warnings=ui_warnings,
+        skipped_rows=skipped_report,
     )
 
 
@@ -904,7 +917,7 @@ def _process_with_universal(
     warnings.extend(parsed.warnings)
 
     try:
-        df = _validate_and_clean(parsed.df)
+        df, skipped_report = _validate_and_clean_with_report(parsed.df)
     except ValueError as exc:
         return ProcessResult(
             success=False, file_name=file_name, stage="validating", message=str(exc)
@@ -920,7 +933,7 @@ def _process_with_universal(
             ),
         )
 
-    report_date = df["date"].iloc[0] if not df.empty else None
+    report_date = max(df["date"]) if not df.empty else None
     total_revenue = float(pd.to_numeric(df["revenue"], errors="coerce").sum())
     total_pax = float(pd.to_numeric(df["pax"], errors="coerce").sum())
 
@@ -961,6 +974,7 @@ def _process_with_universal(
         inserted=inserted,
         skipped=skipped,
         warnings=warnings,
+        skipped_rows=skipped_report,
     )
 
 
@@ -1092,20 +1106,38 @@ def _title_case_preserving_acronyms(value) -> str:
 
 
 def _validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
+    """Cleanup without the report — kept for callers that only need rows."""
+    return _validate_and_clean_with_report(df)[0]
+
+
+def _validate_and_clean_with_report(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Standardize column names/types and drop unusable rows. This is the
     common cleanup step run regardless of which parser produced the
     DataFrame, so the database layer always receives a consistent shape.
+
+    Returns (clean rows, report of rows not imported). The report includes
+    rows the parser already dropped (df.attrs["skipped_rows"]) plus the
+    ones dropped here: invalid dates, dates outside
+    import_report.MIN_VALID_DATE .. today + MAX_FUTURE_DAYS (corrupted
+    cells such as year 3601 are rejected instead of imported), and lines
+    with neither PAX nor revenue.
     """
+    parser_report = None
+    if df is not None:
+        parser_report = getattr(df, "attrs", {}).get("skipped_rows")
     if df is None or df.empty:
-        return pd.DataFrame(columns=REQUIRED_COLUMNS)
+        return pd.DataFrame(columns=REQUIRED_COLUMNS), _import_report.combine([parser_report])
 
     df = df.copy()
-    df.columns = [str(c).strip().lower() for c in df.columns]
+    df.columns = [str(c).strip() if str(c) in _import_report.HELPER_COLS else str(c).strip().lower()
+                  for c in df.columns]
 
     missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing:
         raise ValueError(f"Parsed data is missing required column(s): {missing}")
+
+    raw_view = df.copy()   # figures as the parser produced them, for the report
 
     df["segment"] = df["segment"].astype(str).str.strip().apply(_title_case_preserving_acronyms)
     df["outlet"] = df["outlet"].astype(str).str.strip()
@@ -1122,14 +1154,32 @@ def _validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["traffic"] = pd.NA
 
+    report = [parser_report]
+    if _import_report.DATE_RAW_COL not in df.columns:
+        df[_import_report.DATE_RAW_COL] = df["date"]
+        raw_view[_import_report.DATE_RAW_COL] = df["date"]
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
-    df = df.dropna(subset=["date"])
+
+    bad_date = df["date"].isna()
+    report.append(_import_report.frame(raw_view[bad_date], "Date is not a valid date"))
+    df = df[~bad_date]
+
+    lo, hi = _import_report.MIN_VALID_DATE, _import_report.max_valid_date()
+    out_of_range = df["date"].map(lambda d: d < lo or d > hi)
+    report.append(_import_report.frame(
+        raw_view.loc[out_of_range[out_of_range].index],
+        f"Date outside the accepted range ({lo:%d %b %Y} to {hi:%d %b %Y})"))
+    df = df[~out_of_range]
 
     # A row with neither PAX nor Revenue carries no information — drop it.
-    df = df[~(df["pax"].isna() & df["revenue"].isna())]
+    no_figures = df["pax"].isna() & df["revenue"].isna()
+    report.append(_import_report.frame(
+        raw_view.loc[no_figures[no_figures].index], "No PAX and no revenue (empty line)"))
+    df = df[~no_figures]
 
+    df = df.drop(columns=[c for c in _import_report.HELPER_COLS if c in df.columns])
     # Same date/segment/outlet/location on more than one line = month-end
     # adjustment lines; add them together (see database.combine_duplicate_revenue_rows).
     df = database.combine_duplicate_revenue_rows(df, ["date", "segment", "outlet", "location"])
     df = df.reset_index(drop=True)
-    return df
+    return df, _import_report.combine(report)

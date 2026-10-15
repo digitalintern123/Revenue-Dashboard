@@ -144,6 +144,40 @@ def render_result_from_process_result(
         extra_lines=extra_lines,
         expected_format=expected_format,
     )
+    render_skipped_rows(getattr(pr, "skipped_rows", None), pr.file_name)
+
+
+def render_skipped_rows(report, file_name: str) -> None:
+    """
+    "Rows not imported" table for one upload: Excel row, the values as they
+    were in the file, and why each row was left out (or imported without a
+    figure) — see modules/import_report.py. Shows nothing when every row
+    was imported.
+    """
+    if report is None or getattr(report, "empty", True):
+        return
+    from . import import_report
+    import hashlib
+
+    with_figures = report[~report["Reason"].str.startswith("No PAX and no revenue")]
+    title = f"⚠️ {len(report):,} row(s) not imported — {file_name}"
+    if len(with_figures) != len(report):
+        title += f" ({len(with_figures):,} with figures)"
+    with st.expander(title, expanded=not with_figures.empty):
+        st.markdown("\n".join(f"- {line}" for line in import_report.summary(report)))
+        st.caption(
+            "Rows with figures are listed first. Fix them in the source file and upload it "
+            "again — rows already imported are skipped automatically, so nothing is counted twice."
+        )
+        st.dataframe(report, use_container_width=True, hide_index=True)
+        key = hashlib.md5(f"{file_name}-{len(report)}".encode()).hexdigest()[:10]
+        st.download_button(
+            "Download this list (CSV)",
+            report.to_csv(index=False).encode("utf-8-sig"),
+            file_name=f"not_imported_{file_name.rsplit('.', 1)[0]}.csv",
+            mime="text/csv",
+            key=f"dl_skipped_{key}",
+        )
 
 
 # ---------------------------------------------------------------------------

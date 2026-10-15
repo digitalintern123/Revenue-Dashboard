@@ -1293,6 +1293,9 @@ def save_dataframe_batched(
     return {"inserted": total_inserted, "skipped": total_skipped, "total_rows": total}
 
 
+_FALLBACK_BATCH_ROWS = 10000  # rows per chunk when COPY isn't available (SQLite)
+
+
 def save_dataframe_batched_v2(
     df: pd.DataFrame,
     source_file: str,
@@ -1353,23 +1356,42 @@ def save_dataframe_batched_v2(
             if progress_callback:
                 progress_callback(0.3, f"COPY failed ({copy_err}) — switching to chunked insert…")
 
-    # Fallback: chunked executemany
+    # Fallback: chunked executemany.
+    # Batches are cut only at date boundaries: save_dataframe adds together
+    # lines that share (date, outlet, location) — month-end second lines and
+    # outlet names that canonicalize to the same outlet — but only within one
+    # batch. Cutting by row position put such lines in different batches, so
+    # the later one hit the unique constraint and was dropped as a
+    # "duplicate" (₹5.25 Cr lost on one historical workbook).
     total_inserted = 0
     total_skipped  = 0
-    batch_size = 10000
-    for start in range(0, total, batch_size):
-        batch_df = df.iloc[start:start + batch_size].copy()
+    batch_size = _FALLBACK_BATCH_ROWS
+    work = df.assign(_batch_date=pd.to_datetime(df["date"], errors="coerce")).sort_values(
+        "_batch_date", kind="stable")
+    date_sizes = work.groupby("_batch_date", sort=True, dropna=False).size()
+    batches, current, current_n = [], [], 0
+    for day, n in date_sizes.items():
+        current.append(day)
+        current_n += n
+        if current_n >= batch_size:
+            batches.append(current)
+            current, current_n = [], 0
+    if current:
+        batches.append(current)
+    done = 0
+    for days in batches:
+        batch_df = work[work["_batch_date"].isin(days)].drop(columns="_batch_date")
         result = save_dataframe(batch_df, source_file, record_upload=False)
         total_inserted += result["inserted"]
         total_skipped  += result["skipped"]
-        pct = min((start + batch_size) / total, 1.0)
+        done += len(batch_df)
         if progress_callback:
-            progress_callback(pct, f"{total_inserted:,} saved ({start + len(batch_df):,}/{total:,})")
+            progress_callback(min(done / total, 1.0), f"{total_inserted:,} saved ({done:,}/{total:,})")
 
     # Record the upload in upload_log — batched save skips this per-batch
     # so we do it once here after all batches complete.
     if total_inserted > 0:
-        report_date = _to_date(df["date"].iloc[0]) if "date" in df.columns else None
+        report_date = _to_date(max(df["date"])) if "date" in df.columns else None
         with ENGINE.connect() as _conn:
             _rev = _conn.execute(
                 select(func.coalesce(func.sum(RevenueMaster.revenue), 0.0))
@@ -1591,6 +1613,13 @@ def save_dataframe(
         ["date", "segment", "business_unit", "outlet", "location",
          "pax", "revenue", "aop", "traffic", "source_file", "uploaded_at"]
     ].to_dict("records")
+    # Blank figures must be stored as NULL. SQLite turns a float NaN into
+    # NULL itself, but PostgreSQL stores a real NaN — and SUM() over a column
+    # containing NaN is NaN (upload-history totals, AOP sums, ...).
+    records = [
+        {k: (None if isinstance(v, float) and v != v else v) for k, v in r.items()}
+        for r in records
+    ]
 
     insert_sql = text(
         """
@@ -1625,7 +1654,7 @@ def save_dataframe(
     skipped = len(records) - inserted
 
     if record_upload:
-        report_date = _to_date(df["date"].iloc[0]) if "date" in df.columns else None
+        report_date = _to_date(max(df["date"])) if "date" in df.columns else None
         # Sum revenue/PAX for only the rows this call actually inserted,
         # not the whole parsed file — every record just inserted carries
         # this exact (source_file, uploaded_at) pair (uploaded_at is a

@@ -283,3 +283,26 @@ class TestUploadRateLimit:
                 ), {"fn": f"old{i}.xlsx", "ts": old_ts})
         ok, _ = db.check_upload_rate_limit("carol")
         assert ok is True
+
+
+# ── Batched save: lines for the same date/outlet in different batches ────────
+
+def test_batched_save_adds_same_outlet_lines_across_batches(monkeypatch):
+    """'Visitor Lounge' canonicalizes to 'Reserved Lounge'. With row-position
+    batches the second line landed in the next batch and was dropped as a
+    duplicate; batches now break only at date boundaries, so it's added."""
+    monkeypatch.setattr(db, "_FALLBACK_BATCH_ROWS", 2)
+    d1, d2 = dt.date(2019, 3, 1), dt.date(2019, 3, 2)
+    df = pd.DataFrame([
+        (d1, "Lounges", "T1D Lounge", "Delhi", 10, 1000.0, None, None),
+        (d2, "Lounges", "Reserved Lounge", "Delhi", 20, 2000.0, None, None),   # row 2: batch 1 by position
+        (d2, "Lounges", "Visitor Lounge", "Delhi", 5, 500.0, None, None),      # row 3: batch 2 by position
+        (d2, "Atithya", "Porter", "Delhi", 1, 100.0, None, None),
+    ], columns=["date", "segment", "outlet", "location", "pax", "revenue", "aop", "traffic"])
+    res = db.save_dataframe_batched_v2(df, source_file="batch_boundary_test.xlsx")
+    assert res["skipped"] == 0
+    saved = db.load_for_date_range(d1, d2)
+    saved = saved[saved["source_file"] == "batch_boundary_test.xlsx"]
+    assert saved["revenue"].sum() == 3600.0
+    reserved = saved[(saved["date"].astype(str) == str(d2)) & (saved["outlet"] == "Reserved Lounge")]
+    assert reserved["revenue"].iloc[0] == 2500.0 and reserved["pax"].iloc[0] == 25
