@@ -188,8 +188,11 @@ DB_PATH = _DATABASE_URL
 if _IS_POSTGRES:
     # Enforce SSL/TLS — add sslmode=require if not already present.
     # Never allow unencrypted connections to the production database.
+    # A database on the same machine (VPS: localhost / unix socket) never
+    # leaves the server, so it is exempt; an explicit sslmode always wins.
     _pg_url = _DATABASE_URL
-    if "sslmode=" not in _pg_url:
+    _pg_local = (make_url(_pg_url).host or "localhost") in ("localhost", "127.0.0.1", "::1")
+    if "sslmode=" not in _pg_url and not _pg_local:
         _sep = "&" if "?" in _pg_url else "?"
         _pg_url = _pg_url + _sep + "sslmode=require"
     # 60s query timeout via the libpq "options" startup parameter. Connection

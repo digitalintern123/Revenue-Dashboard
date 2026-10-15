@@ -306,6 +306,12 @@ PDF's own label rather than dropping the row, so new outlets stay visible
 (you may just see it listed under two slightly different names until the
 map is updated).
 
+## Deploying on a VPS with Plesk
+
+See **[DEPLOY_PLESK.md](DEPLOY_PLESK.md)**: Plesk Git deploy, PostgreSQL on the
+VPS, systemd service, nginx (WebSocket) settings, HTTPS and nightly off-server
+backups. Ready-made files are in `deploy/`.
+
 ## Deploying to Render
 
 The repo includes a `render.yaml` Blueprint that runs the app as a Render web service.

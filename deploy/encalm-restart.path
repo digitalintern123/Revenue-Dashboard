@@ -1,0 +1,11 @@
+# /etc/systemd/system/encalm-restart.path
+# Watches the file that deploy/post_deploy.sh touches after every Git deploy,
+# and restarts the app — so the Plesk domain user never needs sudo.
+[Unit]
+Description=Restart Encalm after a Plesk Git deploy
+
+[Path]
+PathChanged=/var/www/vhosts/YOUR-DOMAIN.COM/encalm-app/.deployed
+
+[Install]
+WantedBy=multi-user.target
