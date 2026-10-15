@@ -159,3 +159,31 @@ def test_goa_two_month_blocks_keeps_only_current_month():
     t = _totals(goa)
     assert t[("Goa", "Domestic")] == 700 * DAYS
     assert t[("Goa", "International")] == 50 * DAYS
+
+
+def test_monthly_cross_tab_stores_domestic_international_split():
+    """Monthly 'Apr24-Mar26' sheets: Hyderabad / Goa are stored as Domestic
+    and International (dep + arr), not one airport total, so lounge PEN %
+    uses real figures. Delhi keeps its terminal pools."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "HYD"
+    ws.append(["HYD"])
+    ws.append(["Month", "International", None, "Domestic", None, "Sub Totals", None, "G.Total "])
+    ws.append([None, "Dep.", "Arr.", "Dep.", "Arr.", "Dep.", "Arr.", None])
+    ws.append(["Apr'24", 10, 20, 100, 200, 110, 220, 330])
+    ws.append(["May'24", 11, 21, "1,000", "2,000", 1011, 2021, 3032])     # Indian-format text
+    ws.append(["Fy24-25", 21, 41, 1100, 2200, 1121, 2241, 3362])          # rollup, skipped
+    g = wb.create_sheet("GOX")
+    g.append(["GOX"])
+    g.append(["Month", "Domestic", None, "International", None, "Sub Totals", None, "G.Total "])
+    g.append([None, "Arr.", "Dep.", "Arr.", "Dep.", "Dep.", "Arr.", None])
+    g.append(["Apr'24", 300, 400, 5, 6, 406, 305, 711])
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    df = tp.parse_traffic_auto(buf, "monthly.xlsx")
+    assert set(df["granularity"]) == {"monthly"}
+    t = df.assign(m=[d.month for d in df["date"]]).groupby(["location", "m", "terminal"])["traffic"].sum().to_dict()
+    assert t[("Hyderabad", 4, "International")] == 30 and t[("Hyderabad", 4, "Domestic")] == 300
+    assert t[("Hyderabad", 5, "Domestic")] == 3000
+    assert t[("Goa", 4, "Domestic")] == 700 and t[("Goa", 4, "International")] == 11
+    assert "" not in set(df["terminal"])

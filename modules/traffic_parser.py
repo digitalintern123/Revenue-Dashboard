@@ -2038,15 +2038,23 @@ def _parse_cross_tab_daily(
 
 def _segment_to_terminal(segment_name: str, location: str) -> str:
     """
-    Map a cross-tab column-group label (e.g. "T3 International", "Domestic")
-    to a canonical terminal ("T1"/"T2"/"T3") for Delhi, or "" (whole-
-    airport, no real per-terminal breakdown) for Hyderabad/Goa, whose
-    "International"/"Domestic" segments are flight-type categories, not
-    physical terminals.
+    Map a cross-tab column-group label (e.g. "T3 International Dep.",
+    "Domestic Arr.") to the terminal label stored in airport_traffic.
+
+    Delhi: its physical terminal pools (T1 Dep, T3 Int Arr, …).
+    Hyderabad / Goa / Bhogapuram: "Domestic" or "International" — the same
+    labels the daily files use and terminal_mapping assigns to the lounges,
+    so their PEN % / SPP use the real split instead of an estimated share
+    of the airport total. Departure and arrival columns of one type are
+    added together by the caller. Anything else → "" (whole airport).
     """
-    if location != "Delhi":
-        return ""
     key = segment_name.strip().lower()
+    if location != "Delhi":
+        if "domestic" in key:
+            return "Domestic"
+        if "international" in key or re.search(r"\binter\b", key):
+            return "International"
+        return ""
     return _DELHI_SEGMENT_TO_TERMINAL.get(key, "")
 
 

@@ -72,6 +72,13 @@ International Lounge, Reserved Lounge → International; Atithya, Porter,
 Enwrap → All (Domestic + International); anything else → Main Terminal
 (whole airport).
 
+**Stored traffic for Hyderabad / Goa / Bhogapuram** is always split into
+*Domestic* and *International* (departures + arrivals), for daily and monthly
+files alike (`traffic_parser._segment_to_terminal`). Older uploads that hold
+only an airport total (terminal "") fall back to a fixed share (Hyderabad
+82.7 % / 17.3 %, Goa 96.4 % / 3.6 %) marked as estimated — re-upload those
+files with *Replace* to use the real split.
+
 **Re-importing traffic:** with *Replace* ticked (default), the stored rows for
 every airport + date in the file (all terminals, same granularity) are
 deleted first (`database._delete_traffic_rows`); otherwise existing rows are

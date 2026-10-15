@@ -91,13 +91,20 @@ names and file paths in them may no longer exist).
   stored them as July 2025 (e.g. 1 Jul 2025 = 19,334 instead of 12,163).
   Airports read by the dedicated Goa / Hyderabad readers now ignore the
   generic reader, so only the current month (July 2026) is imported.
+- **Monthly traffic for Hyderabad / Goa stored as Domestic + International**
+  (was one airport total). Lounge PEN % / SPP for Apr-2024 – Mar-2026 used
+  a fixed-share estimate (Goa international up to ~70 % too low) and the
+  whole-airport outlets (Atithya, Prive) were measured against twice the
+  airport traffic. Values are stored exactly as in the file (the file is the
+  source of truth). Re-upload `Monthly_Traffic_All_Apr_24_to_Mar26.xlsx`
+  with Replace.
 - **Replace on traffic import** (on by default): a corrected file overwrites
   stored traffic for its airports and dates; before, re-uploads were skipped.
 
 ### Docs
 - Documentation rewritten for the current app; new
   [USER_GUIDE.md](USER_GUIDE.md) and [SERVER_RUNBOOK.md](SERVER_RUNBOOK.md).
-  Tests: 273.
+  Tests: 274.
 
 ## Version 2.6.0 (October 2026) — hosting, Encalm branding, speed
 
