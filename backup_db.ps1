@@ -1,4 +1,4 @@
-# Encalm Analytics — Daily Database Backup Script (v2)
+# Encalm Analytics - Daily Database Backup Script (v2)
 # Schedule via Windows Task Scheduler: daily at 2:00 AM
 # Keeps last 30 days of backups.
 
