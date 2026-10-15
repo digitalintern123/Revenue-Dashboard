@@ -37,22 +37,32 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-home    = st.Page("pages/Uploads.py",          title="Upload Data",      url_path="upload", default=True)
-prev_up = st.Page("pages/Previous_Uploads.py", title="Previous Uploads", url_path="previous-uploads")
-ehpl    = st.Page("pages/EHPL.py",             title="EHPL",             url_path="ehpl")
-eats    = st.Page("pages/Encalm_Eats.py",      title="Encalm Eats",      url_path="encalm-eats")
-sky     = st.Page("pages/Sky_Plates.py",       title="Sky Plates",       url_path="sky-plates")
+# Page files live in views/, not pages/: a pages/ folder makes Streamlit also
+# serve each file on its own (unstyled, no menu, slower) when its address is
+# opened directly. url_paths keep the addresses bookmarked from earlier versions.
+home    = st.Page("views/Uploads.py",          title="Upload Data",      url_path="Uploads", default=True)
+prev_up = st.Page("views/Previous_Uploads.py", title="Previous Uploads", url_path="Previous_Uploads")
+ehpl    = st.Page("views/EHPL.py",             title="EHPL",             url_path="EHPL")
+eats    = st.Page("views/Encalm_Eats.py",      title="Encalm Eats",      url_path="Encalm_Eats")
+sky     = st.Page("views/Sky_Plates.py",       title="Sky Plates",       url_path="Sky_Plates")
 
 # Lucide icons for the sidebar links (Streamlit's own `icon=` only takes
 # emoji / Material icons). Keys are the url_paths above; "" = default page.
 ui.sidebar_nav_icons({
     "": "upload",
-    "upload": "upload",
-    "previous-uploads": "history",
-    "ehpl": "plane-takeoff",
-    "encalm-eats": "utensils",
-    "sky-plates": "chef-hat",
+    "Uploads": "upload",
+    "Previous_Uploads": "history",
+    "EHPL": "plane-takeoff",
+    "Encalm_Eats": "utensils",
+    "Sky_Plates": "chef-hat",
 })
 
-pg = st.navigation({"Data": [home, prev_up], "Dashboards": [ehpl, eats, sky]})
+# Before sign-in, show no menu at all — only the sign-in form.
+from modules.auth import is_logged_in
+signed_in = is_logged_in()
+if not signed_in:
+    ui.hide_sidebar()
+
+pg = st.navigation({"Data": [home, prev_up], "Dashboards": [ehpl, eats, sky]},
+                   position="sidebar" if signed_in else "hidden")
 pg.run()

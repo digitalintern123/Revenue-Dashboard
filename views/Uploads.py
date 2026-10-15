@@ -1,4 +1,4 @@
-# pages/Uploads.py — standalone Uploads page (extracted from Home.py)
+# views/Uploads.py — standalone Uploads page (extracted from Home.py)
 # Keeps the full upload workflow visible in nav without relying on Home.
 import streamlit as st
 from modules import ui as _ui

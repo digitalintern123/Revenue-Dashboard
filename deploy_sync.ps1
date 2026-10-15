@@ -41,6 +41,14 @@ if (-not $Source) {
              Where-Object { $_.Name -like "*Revenue*" } | Select-Object -First 1
     if ($found) { $Source = $found.FullName }
 }
+# Page files moved from pages\ to views\: a leftover pages\ folder (only
+# __pycache__ after the move) must go, or Streamlit serves pages unstyled.
+$oldPages = Join-Path $AppDir "pages"
+if ((Test-Path $oldPages) -and -not (Get-ChildItem $oldPages -Filter *.py -ErrorAction SilentlyContinue)) {
+    Remove-Item $oldPages -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Log "removed leftover pages folder"
+}
+
 if (-not $Source -or -not (Test-Path $Source)) { exit 0 }   # Plesk Git not set up yet
 
 $branch = (Invoke-Git rev-parse --abbrev-ref HEAD).Out

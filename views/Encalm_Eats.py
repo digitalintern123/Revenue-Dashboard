@@ -1,5 +1,5 @@
 """
-pages/Encalm_Eats.py — Encalm Eats analytics + DSR upload.
+views/Encalm_Eats.py — Encalm Eats analytics + DSR upload.
 
 Analytics tab: reads from encalm_eats_dsr table (outlet-level DSR data)
 when available for the selected date, falling back to revenue_master

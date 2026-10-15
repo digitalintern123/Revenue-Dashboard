@@ -1,5 +1,5 @@
 """
-pages/1_Previous_Uploads.py — Upload history, available dates, and the
+views/Previous_Uploads.py — Upload history, available dates, and the
 "load a historical date as active" workflow.
 """
 

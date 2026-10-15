@@ -141,6 +141,15 @@ def inject_css() -> None:
     st.markdown(_CSS, unsafe_allow_html=True)
 
 
+def hide_sidebar() -> None:
+    """No sidebar (logo, menu, collapse arrow) — used on the sign-in screen."""
+    st.markdown(
+        '<style>section[data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"],'
+        ' [data-testid="stExpandSidebarButton"] { display: none !important; }</style>',
+        unsafe_allow_html=True,
+    )
+
+
 @functools.lru_cache(maxsize=None)
 def lucide(name: str) -> str:
     """CSS url() for a bundled Lucide icon (assets/icons/<name>.svg)."""
