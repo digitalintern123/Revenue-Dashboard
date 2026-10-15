@@ -6,6 +6,10 @@ $Port = 8501
 $TaskName = "EncalmAnalytics"
 $LogFile = "C:\encalm\logs\watchdog.log"
 
+# Apply new commits that Plesk Git pulled from GitHub (see deploy_sync.ps1)
+$DeploySync = Join-Path $PSScriptRoot "deploy_sync.ps1"
+if (Test-Path $DeploySync) { & $DeploySync }
+
 # Ensure log directory exists
 $LogDir = Split-Path $LogFile
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir | Out-Null }
