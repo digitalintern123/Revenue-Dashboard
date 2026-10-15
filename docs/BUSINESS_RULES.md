@@ -72,6 +72,11 @@ International Lounge, Reserved Lounge → International; Atithya, Porter,
 Enwrap → All (Domestic + International); anything else → Main Terminal
 (whole airport).
 
+**Re-importing traffic:** with *Replace* ticked (default), the stored rows for
+every airport + date in the file (all terminals, same granularity) are
+deleted first (`database._delete_traffic_rows`); otherwise existing rows are
+kept and the file's rows for them are skipped.
+
 **Location total (Traffic KPI card):** each location's stored terminal rows
 added once (`database.join_revenue_with_traffic`) — Delhi's 8 pools,
 Domestic + International elsewhere. Adding outlet pools would double-count,

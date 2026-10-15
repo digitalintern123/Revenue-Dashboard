@@ -92,3 +92,21 @@ def test_airport_sheet_with_no_rows_is_reported():
 ])
 def test_bhogapuram_terminal_mapping(outlet, terminal):
     assert tm.get_terminal_for_outlet(outlet, "Bhogapuram") == terminal
+
+
+def test_may26_hyd_layout_heading_above_departure_column():
+    """'Domestic' / 'International' sit right above the Departure columns
+    (Departure before Arrival). The International heading must not make
+    its Departure column count as Domestic."""
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "HYD Traffic May-26"
+    ws.append([None, "Domestic", None, "International", None])
+    ws.append(["Date", "Departure", "Arrival", "Departure", "Arrival"])
+    for d in range(1, DAYS + 1):
+        ws.append([dt.datetime(2026, 5, d), 100, 200, 10, 20])
+    ws.append(["Total", 300, 600, 30, 60])
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    t = _totals(tp.parse_traffic_auto(buf, "may.xlsx"))
+    assert t[("Hyderabad", "Domestic")] == 300 * DAYS
+    assert t[("Hyderabad", "International")] == 30 * DAYS

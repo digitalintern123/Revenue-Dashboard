@@ -1005,13 +1005,16 @@ def _parse_hyd_side_by_side(file_obj) -> Optional[pd.DataFrame]:
                     ct = _classify_type_hyd(v)
                     if ct:
                         # This column and forward columns inherit this type
-                        # (forward-fill within the row)
+                        # (forward-fill within the row), up to — not
+                        # including — the column of the next type heading:
+                        # in the May-26 layout "International" sits right
+                        # above the international Departure column.
                         for _fc in range(_ci, n_cols_h):
-                            if _fc not in col_type_h:
-                                col_type_h[_fc] = ct
                             next_v = header_rows_h[_ri][_fc] if _fc < len(header_rows_h[_ri]) else None
                             if _fc > _ci and pd.notna(next_v) and isinstance(next_v, str) and _classify_type_hyd(next_v):
                                 break  # stop at next type label
+                            if _fc not in col_type_h:
+                                col_type_h[_fc] = ct
 
         # Find date col (column 0 usually has datetime values in data rows)
         for _ci in range(n_cols_h):

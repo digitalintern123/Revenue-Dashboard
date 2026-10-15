@@ -1750,6 +1750,25 @@ def delete_upload_by_filename(file_name: str) -> dict:
     return counts
 
 
+def _delete_traffic_rows(work: pd.DataFrame) -> int:
+    """Delete airport_traffic rows for the (location, granularity, date)
+    keys in `work` (dates as ISO strings). Returns rows deleted."""
+    deleted = 0
+    with ENGINE.begin() as conn:
+        for (loc, gran), grp in work.groupby(["location", "granularity"]):
+            dates = sorted(set(grp["date"]))
+            for i in range(0, len(dates), 500):
+                result = conn.execute(
+                    AirportTraffic.__table__.delete().where(
+                        (AirportTraffic.location == loc)
+                        & (AirportTraffic.granularity == gran)
+                        & (AirportTraffic.date.in_([_to_date(d) for d in dates[i:i + 500]]))
+                    )
+                )
+                deleted += result.rowcount or 0
+    return deleted
+
+
 def delete_aop_targets_for_months(year_months) -> int:
     """
     Delete every aop_target row whose (year, month) is in `year_months`.
@@ -1851,7 +1870,7 @@ def load_for_date_range(start_date: dt.date, end_date: dt.date) -> pd.DataFrame:
 # Airport traffic: save, load, and join against revenue
 # ---------------------------------------------------------------------------
 
-def save_traffic_dataframe(df: pd.DataFrame, source_file: str) -> dict:
+def save_traffic_dataframe(df: pd.DataFrame, source_file: str, replace: bool = False) -> dict:
     """
     Insert a (date, location, terminal, traffic, granularity, period_end)
     DataFrame into airport_traffic. `terminal` and `period_end` are
@@ -1861,6 +1880,11 @@ def save_traffic_dataframe(df: pd.DataFrame, source_file: str) -> dict:
     dedup behavior as save_dataframe() for revenue — re-uploading a
     traffic file you've already loaded is a harmless no-op that reports
     how many rows were skipped.
+
+    replace=True first deletes the stored rows for every (location,
+    granularity, date) in the file — all terminals — so a corrected file
+    overwrites earlier figures for exactly those airports and dates
+    (`replaced` in the result). Other dates and airports are untouched.
     """
     if df.empty:
         return {"inserted": 0, "skipped": 0, "total_rows": 0}
@@ -1922,6 +1946,8 @@ def save_traffic_dataframe(df: pd.DataFrame, source_file: str) -> dict:
     cols = ["date", "period_end", "granularity", "location", "terminal",
             "traffic", "source_file", "uploaded_at"]
 
+    replaced = _delete_traffic_rows(work_t) if replace else 0
+
     # Fast path: PostgreSQL COPY
     if _IS_POSTGRES:
         try:
@@ -1946,7 +1972,7 @@ def save_traffic_dataframe(df: pd.DataFrame, source_file: str) -> dict:
     else:
         records = work_t[cols].to_dict("records")
         if not records:
-            return {"inserted": 0, "skipped": 0, "total_rows": len(df)}
+            return {"inserted": 0, "skipped": 0, "total_rows": len(df), "replaced": replaced}
         insert_sql = text("""
             INSERT INTO airport_traffic
                 (date, period_end, granularity, location, terminal, traffic, source_file, uploaded_at)
@@ -1987,7 +2013,7 @@ def save_traffic_dataframe(df: pd.DataFrame, source_file: str) -> dict:
         upload_type="Traffic",
     )
 
-    return {"inserted": inserted, "skipped": skipped, "total_rows": len(df)}
+    return {"inserted": inserted, "skipped": skipped, "total_rows": len(df), "replaced": replaced}
 
 
 def load_traffic_for_date_range(start_date: dt.date, end_date: dt.date) -> pd.DataFrame:

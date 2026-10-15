@@ -77,11 +77,18 @@ names and file paths in them may no longer exist).
   had shown "120 rows parsed" with Delhi and Vizag missing).
 - Traffic KPI card: whole-airport traffic per location counted once (it was
   adding the whole-airport pool to the terminal pools — about double).
+- **Hyderabad traffic columns:** in the May-2026 template ("Domestic |
+  International" right above "Departure | Arrival") international departures
+  were counted as domestic and international was arrivals only (May:
+  Domestic 12,92,765 / International 2,02,439 instead of 21,45,938 /
+  4,12,854). Fixed.
+- **Replace on traffic import** (on by default): a corrected file overwrites
+  stored traffic for its airports and dates; before, re-uploads were skipped.
 
 ### Docs
 - Documentation rewritten for the current app; new
   [USER_GUIDE.md](USER_GUIDE.md) and [SERVER_RUNBOOK.md](SERVER_RUNBOOK.md).
-  Tests: 268.
+  Tests: 270.
 
 ## Version 2.6.0 (October 2026) — hosting, Encalm branding, speed
 

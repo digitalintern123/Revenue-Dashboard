@@ -337,6 +337,14 @@ with tab_traffic:
         for _tf in traffic_files:
             upload_status.render_file_selected(_tf.name, getattr(_tf,"size",None))
 
+    traffic_replace = st.checkbox(
+        "Replace existing traffic for the dates and airports in this file",
+        value=True, key="up_traffic_replace",
+        help=("Deletes stored traffic for each airport and date this file covers, then "
+              "imports the file. Without this, rows that already exist are kept unchanged, "
+              "so a corrected traffic file cannot update earlier figures."),
+    )
+
     if st.button("📥 Import Traffic Data", disabled=not traffic_files) and traffic_files:
         from modules import traffic_parser
         pending_t = []
@@ -351,11 +359,12 @@ with tab_traffic:
                     _parsed, _err = None, (str(_exc), "reading")
                 if _parsed is not None:
                     try:
-                        _sr = database.save_traffic_dataframe(_parsed, _tf.name)
+                        _sr = database.save_traffic_dataframe(_parsed, _tf.name, replace=traffic_replace)
                         pending_t.append({"success":True,"file_name":_tf.name,
                             "inserted":_sr["inserted"],"skipped":_sr["skipped"],
                             "rows_parsed":len(_parsed),"parsed_df":_parsed,
-                            "skipped_sheets":_parsed.attrs.get("skipped_sheets", [])})
+                            "skipped_sheets":_parsed.attrs.get("skipped_sheets", []),
+                            "replaced":_sr.get("replaced", 0)})
                     except Exception as _exc2:
                         pending_t.append({"success":False,"file_name":_tf.name,
                             "message":str(_exc2),"stage":"saving"})
@@ -372,7 +381,9 @@ with tab_traffic:
             if _tr["success"]:
                 upload_status.render_result(True, _tr["file_name"], "",
                     inserted=_tr["inserted"], skipped=_tr["skipped"],
-                    extra_lines=[f"**Rows parsed:** {_tr['rows_parsed']:,}"])
+                    extra_lines=[f"**Rows parsed:** {_tr['rows_parsed']:,}"]
+                                + ([f"**Replaced:** {_tr['replaced']:,} earlier rows for the same airports and dates"]
+                                   if _tr.get("replaced") else []))
                 for _msg in _tr.get("skipped_sheets") or []:
                     st.warning(f"⚠️ {_msg}")
                 with st.expander(f"📋 Preview — {_tr['file_name']}", expanded=True):

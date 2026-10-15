@@ -332,3 +332,35 @@ class TestBhogapuramTraffic:
     def test_location_total_counts_each_terminal_once(self):
         out = db.join_revenue_with_traffic(self._setup())
         assert float(out.loc[out["location"] == "Bhogapuram", "traffic"].iloc[0]) == 2200
+
+
+# ── Traffic re-import with replace ───────────────────────────────────────────
+
+class TestTrafficReplace:
+    @staticmethod
+    def _traffic(location, day, terminal, value):
+        return {"date": dt.date(2026, 5, day), "period_end": pd.NaT, "granularity": "daily",
+                "location": location, "terminal": terminal, "traffic": value}
+
+    def _stored(self):
+        df = db.load_traffic_for_date_range(dt.date(2026, 5, 1), dt.date(2026, 5, 31))
+        return {(r.location, pd.Timestamp(r.date).day, r.terminal): r.traffic for r in df.itertuples()}
+
+    def test_replace_overwrites_only_the_files_airports_and_dates(self):
+        old = pd.DataFrame([self._traffic("Hyderabad", 1, "Domestic", 999.0),
+                            self._traffic("Hyderabad", 2, "Domestic", 999.0),
+                            self._traffic("Goa", 1, "Domestic", 50.0)])
+        db.save_traffic_dataframe(old, "old.xlsx")
+        new = pd.DataFrame([self._traffic("Hyderabad", 1, "Domestic", 300.0),
+                            self._traffic("Hyderabad", 1, "International", 30.0)])
+
+        kept = db.save_traffic_dataframe(new, "new.xlsx")               # default: skip existing
+        assert kept["inserted"] == 1 and self._stored()[("Hyderabad", 1, "Domestic")] == 999.0
+
+        res = db.save_traffic_dataframe(new, "new.xlsx", replace=True)
+        stored = self._stored()
+        assert res["replaced"] == 2 and res["inserted"] == 2
+        assert stored[("Hyderabad", 1, "Domestic")] == 300.0
+        assert stored[("Hyderabad", 1, "International")] == 30.0
+        assert stored[("Hyderabad", 2, "Domestic")] == 999.0           # date not in the file
+        assert stored[("Goa", 1, "Domestic")] == 50.0                   # airport not in the file
