@@ -1,21 +1,272 @@
-# Encalm Analytics — Changelog
+# Changelog — Encalm Revenue Analytics
+
+Newest first. Earlier entries describe the app as it was at the time (page
+names and file paths in them may no longer exist).
+
+---
+
+## Version 2.7.0 (October 2026) — every line item, Windows server operations
+
+### Imports
+- **Rows not imported report.** Revenue uploads list every line left out (or
+  imported without revenue/PAX) with its Excel row and reason, plus a CSV
+  download (`modules/import_report.py`).
+- **Impossible dates rejected:** only 1 Jan 2015 to one year ahead is accepted
+  (a #VALUE! date read as year 3601 had been stored).
+- Lines lost when saving in batches across date boundaries are fixed; the
+  upload's report date is the latest date in the file.
+
+### AOP and Encalm Eats
+- Encalm Eats AOP lines mapped to the DSR outlet names (IndiSip 32-34, CDH,
+  Indisip Bar PESC → J&B Pour House T2, Bhogapuram McDonald's, IndiSip Café /
+  Bistro, Svara, Totally Desi). One AOP line can cover several outlets
+  (Bhogapuram Starbucks = Departure + Arrival, split by revenue).
+- AOP lines with a note in the AOP master are not imported (provisional);
+  shown as *Not imported* in the upload's mapping table.
+- **DSR parser:** the *Bhogapuram Store's* section total was stored as a Delhi
+  outlet (double count) and Bhogapuram outlets were filed under Delhi — fixed;
+  repeated spaces in outlet names collapsed.
+- Encalm Eats page offers revenue-upload dates again after a DSR is uploaded;
+  per location and day the DSR is used where present, else the revenue
+  upload total.
+
+### Dashboards
+- **EHPL tables built from the data:** every stored outlet appears exactly
+  once and TOTAL EHPL equals the database. Before: Hyderabad GAT / Airport
+  Lodge and Goa CIP / Reserved Lounge were dropped, Delhi RDC and Reserved
+  Lounge and Bhogapuram Domestic Lounge were counted twice, and Delhi's total
+  left out RDC, Business Centre and Reserved Lounge (₹50.65 L in Aug 2026).
+  Unknown outlets go under OTHERS; AOP-only lines (MLCP, Spa T3 Dom) show.
+- **Outlet lists per location** always shown: Hyderabad (Enwrap, Atithya,
+  Airport Lodge / Dormitory, Domestic Lounge, GAT, International Lounge,
+  Encalm Prive, Reserved Lounge, Transit Hotel), Goa (Enwrap, Atithya, Porter,
+  CIP Lounge, Domestic Lounge, International Lounge, Reserved Lounge),
+  Bhogapuram (Enwrap, Atithya, Porter, Domestic Lounge, International Lounge,
+  Reserved Lounge, Spa Domestic).
+- EHPL AOP no longer includes Sky Plates / Encalm Eats targets.
+- Year-wise compares with the previous year by default (was the same year,
+  which broke the tables); identical period labels no longer break tables.
+- Checked against the Aug-2026 workbook: all 68 line items visible with exact
+  amounts in every period 2022–2026 (222 checks).
+
+### Interface
+- Pages moved from `pages/` to `views/` and use the old addresses again
+  (`/EHPL`, `/Encalm_Eats`, …). Opening `/EHPL` used to load the page unstyled
+  with a raw file list in the sidebar and a "Page not found" popup.
+- The sign-in screen shows no sidebar or menu.
+
+### Server (Windows VPS)
+- `C:\encalm` is now a clone of this repository (was a hand-copied folder of
+  another repository).
+- **Watchdog fixed:** a long dash in `watchdog.ps1` made Windows PowerShell 5.1
+  fail on every run since 10 Sep 2026; scripts are ASCII and the task runs
+  with `-ExecutionPolicy Bypass`.
+- **Plesk Git deploys:** `deploy_sync.ps1` (run by the watchdog) applies
+  commits pulled by Plesk, installs new requirements and restarts the app.
+- Port 8501 blocked from the internet (firewall rule).
+- SQLite: `DATA_DIR`, WAL mode, daily online backups (`data/backups`, 7 kept),
+  `scripts/migrate_to_sqlite.py`.
+
+### Docs
+- Documentation rewritten for the current app; new
+  [USER_GUIDE.md](USER_GUIDE.md) and [SERVER_RUNBOOK.md](SERVER_RUNBOOK.md).
+  Tests: 255.
+
+## Version 2.6.0 (October 2026) — hosting, Encalm branding, speed
+
+- **Render hosting**: `render.yaml` blueprint; login settings come from a Render
+  Secret File (`secrets.toml`). `DATABASE_URL` accepts pasted variants (psql
+  snippet, quotes, `postgres://`) and pins the psycopg2 driver; pooled Neon hosts
+  skip the `statement_timeout` startup option. Errors name the bad source without
+  showing the password.
+- **Encalm branding**: official logo (sidebar, sign-in, favicon), navy `#142248` /
+  gold `#CBA578`, Montserrat headings, Lucide icons on pages and tabs.
+- **Dashboards**: compact filter bar with a period summary line, Overview KPI
+  cards (now also on EHPL) and two charts (revenue by location/outlet, 30-day
+  trend). Upload Data and Previous Uploads are split into tabs.
+- **Speed**: render-path reads are cached for 10 minutes and cleared by every
+  upload; schema check once per server; login re-validated at most once a
+  minute. A click on EHPL went from ~20 database queries to none.
+- Previous Uploads preview shows one AOP column (was `aop_x`/`aop_y`).
+- Tests (`tests/`, `test_universal_parser.py`) are now tracked in git.
+
+## Version 2.5.0 (October 2026) — no more dropped month-end lines
+
+- **Repeated date + outlet lines are now added together** instead of keeping only
+  the last one. Revenue workbooks carry month-end lines (fixed fees, rentals,
+  card-billing true-ups) on a second row for the same date and outlet; the old
+  importer kept one row and dropped the other (₹7.4 L lost on 31 Aug 2026,
+  ₹2.04 Cr would have been lost on 30 Sep 2026). Exact repeated rows are still
+  removed so a block pasted twice is not double counted.
+- Raw outlet names that map to the same outlet (e.g. Hyderabad "Dom Prive" and
+  "Prive") are combined at save time too, instead of whichever row came first
+  winning.
+- `.streamlit/config.toml` now runs Streamlit headless (no first-run email prompt).
+- The release zip no longer contains `.streamlit/secrets.toml`, so deploying can't
+  overwrite the server's login settings or database connection.
+
+## Version 2.4.0 (September 2026) — AOP master: full coverage
+
+- **Sky Plates & Encalm Eats AOP** now imported from the AOP master's IFK and F&B
+  rows (`modules/eats_skyplates_aop_parser.py`). The reader finds rows by their
+  labels, reads both FY25-26 and FY26-27 monthly blocks, stores outlet-level
+  targets only (no subtotal rows), and reports any section whose total differs
+  from its outlets. Events & ODCs ("All") is stored under Delhi.
+- **LA22 AOP was stored at 3×** (three alias names collapsed onto one outlet and
+  were summed). Now written once.
+- **EHPL AOP now covers Bhogapuram** (card lounges, M&G, Porter, Baggage Wrap) and
+  Delhi's MLCP Nap & Shower unit. Parsed EHPL AOP reconciles exactly to the
+  sheet's EHPL total row for every month.
+- **AOP import "Replace" option** (on by default) clears stored AOP for the months
+  a file covers before importing, so corrected files overwrite old values.
+- Sky Plates / Encalm Eats pages show AOP Target and Variance in the KPI cards and
+  tables, prorated per month for partial ranges; AOP for planned outlets with no
+  sales appears as one "Other planned outlets" line plus a detail expander.
+
+## Version 2.0.0 (August 2026) — production readiness
+
+This release fixes all audit issues identified in the Production Readiness Audit
+and promotes the application to production-ready status.
+
+---
+
+### Security Fixes
+
+#### S2 — Admin Check Now Requires Explicit secrets Configuration
+**Previously:** Any user whose username ended in `_admin` had admin access.
+**Now:** Admin access requires explicit listing in `[auth.admins]` in secrets.toml.
+Users not listed in `[auth.admins]` have no admin access regardless of username.
+**File:** `Home.py`
+
+#### S3 — Log Files Moved to Dedicated Directory
+**Previously:** `encalm_analytics.log` written to app root directory (`C:\encalm\`).
+**Now:** All logs written to `C:\encalm\logs\` — separate from app code, not web-accessible.
+**File:** `modules/app_logger.py`
+
+---
+
+### Deployment Fixes
+
+#### I1/I2 — Crash Recovery Watchdog
+**New file:** `watchdog.ps1`
+Monitors port 8501 every 3 minutes and auto-restarts the app if it stops responding.
+Register in Task Scheduler:
+```powershell
+schtasks /create /tn "EncalmWatchdog" /tr "powershell.exe -File C:\encalm\watchdog.ps1" /sc minute /mo 3 /ru SYSTEM /f
+```
+
+#### I3 — IIS/ARR Timeout Configuration
+**New file:** `docs/IIS_ARR_SETUP.md`
+Documents exact steps to increase ARR request timeout from 30s to 300s,
+fixing 502 errors during large file uploads (DB3.xlsx, 53K rows).
+
+#### I4 — table_style.py Fix Included
+Traffic merge now uses `(outlet, location)` not `(segment, outlet, location)`.
+This fixes Traffic and Penetration% showing `—` for July and August data.
+**File:** `modules/table_style.py`
+
+---
+
+### Data Integrity Fixes
+
+#### D8 — Daily Database Backup
+**New file:** `backup_db.ps1`
+Creates daily PostgreSQL dumps to `C:\encalm\backups\`, retains 30 days.
+Register in Task Scheduler:
+```powershell
+schtasks /create /tn "EncalmBackup" /tr "powershell.exe -File C:\encalm\backup_db.ps1" /sc daily /st 02:00 /ru SYSTEM /f
+```
+
+---
+
+### Performance Improvements
+
+#### P3 — Increased PostgreSQL Connection Pool
+Pool size: 3 → 5, max_overflow: 7 → 10.
+Supports more concurrent users without connection timeout errors.
+**File:** `modules/database.py`
+
+#### P4 — PostgreSQL Statement Timeout
+Added 60-second statement timeout to prevent runaway queries from blocking the pool.
+**File:** `modules/database.py`
+
+---
+
+### Configuration Improvements
+
+#### Streamlit Config
+- Upload size limit: 200MB → 300MB
+- `headersTimeout`: added 300s for large uploads
+- `maxMessageSize`: added 300MB
+- `fastReruns`: enabled for better UI responsiveness
+
+#### secrets.toml.example
+- Added `[auth.admins]` section documentation
+- Added `DATABASE_URL` production example
+- Clarified all configuration options
+
+---
+
+### All v1 Fixes Carried Forward
+
+All 16 fixes from v1 are included:
+- FIX-01: 40+ outlet canonical name mappings
+- FIX-02: UNIQUE constraint (date, outlet, location)
+- FIX-03: Segment migration covers EHPL+Eats/SkyPlates
+- FIX-04: Segment canonicalization — EHPL+Encalm Eats/Sky Plates
+- FIX-05: AOP priority — per-outlet monthly before daily
+- FIX-06: compare_periods merges on (outlet, location)
+- FIX-07: Segment normalisation in comparisons
+- FIX-08: Multi-FY AOP parsing (FY26-27 was dropped)
+- FIX-09: Amex Hyd outlet mapping
+- FIX-10: NA handling in segment column
+- FIX-11: Auth keys preserved on clear session
+- FIX-12: Spa display names + RL Delhi
+- FIX-13: Total T1 + Total T2 subtotals
+- FIX-14: Snapshot merges on (outlet, location)
+- FIX-15: Better empty-period error message
+- FIX-16: Penetration %/SPP function fix
+
+---
+
+### Production Readiness Score
+
+| Category | v1 | v2 |
+|---|---|---|
+| Security | 68/100 | 88/100 |
+| Authentication | 90/100 | 92/100 |
+| Data Integrity | 85/100 | 90/100 |
+| Error Handling | 82/100 | 85/100 |
+| Deployment | 45/100 | 78/100 |
+| Performance | 70/100 | 82/100 |
+| Testing | 95/100 | 95/100 |
+| **Overall** | **76/100** | **87/100** |
+
+**v2 Verdict: GO ✅**
+
+---
+
+
+---
+
+## Version 1 — final build (August 2026)
 
 All fixes made to the Encalm Analytics application from the initial codebase through the final build.
 
 ---
 
-## Build: Final (Aug 2026)
+### Build: Final (Aug 2026)
 
-### Summary
+#### Summary
 This build contains **16 distinct fixes** across 7 files, resolving critical data integrity issues, comparison logic bugs, segment classification errors, AOP/Traffic display failures, and UI correctness problems.
 
 ---
 
-## Fixes by File
+### Fixes by File
 
 ---
 
-### `modules/database.py`
+#### `modules/database.py`
 
 #### FIX-01 — Outlet Name Canonicalization (40+ mappings added)
 **Problem:** Same physical outlet stored under different names across files (e.g. `Business Center` vs `Business Centre`, `Round D Clock -Motel` vs `Round D Clock (RDC)`, `Nap & Shower LA01` vs `NAP - Premium Lounge`). Cross-file comparisons showed Rs0 for one side.
@@ -50,7 +301,7 @@ Expected mappings:
 
 ---
 
-### `modules/revenue_analysis.py`
+#### `modules/revenue_analysis.py`
 
 #### FIX-06 — compare_periods: Merge on (outlet, location), Not Segment
 **Problem:** `GROUP_COLS = ["segment", "outlet", "location"]` was the merge key. DB3 uses "Lounges"/"Atithya"/"Others", July file uses "EHPL". Outer merge on segment caused every outlet to appear twice — one row per segment value — with Rs0 on the other side.
@@ -64,7 +315,7 @@ Expected mappings:
 
 ---
 
-### `modules/aop_parser.py`
+#### `modules/aop_parser.py`
 
 #### FIX-08 — Multi-FY AOP Parsing (FY26-27 was silently dropped)
 **Problem:** `_extract_month_columns()` had `if result: break` which stopped at the first non-datetime column (e.g. "FY 25-26" summary column at index 17). Only Apr 2025 - Mar 2026 was parsed. Apr 2026 - Mar 2027 was silently ignored → July 2026 AOP = Rs0.
@@ -77,7 +328,7 @@ Expected mappings:
 
 ---
 
-### `modules/data_processor.py`
+#### `modules/data_processor.py`
 
 #### FIX-10 — NA Handling in Segment Column Processing
 **Problem:** `_validate_and_clean()` called `.astype(str).str.strip().apply(_title_case_preserving_acronyms)` on the segment column. With pandas Arrow-backed string arrays (Python 3.12), `pd.NA` arrived as a non-string object causing `AttributeError: 'float' object has no attribute 'strip'`.
@@ -86,7 +337,7 @@ Expected mappings:
 
 ---
 
-### `modules/session.py`
+#### `modules/session.py`
 
 #### FIX-11 — Auth Keys Preserved on Clear Session
 **Problem:** `clear_session()` wiped all Streamlit session state including authentication keys, logging users out when they clicked "Clear Session Data".
@@ -95,7 +346,7 @@ Expected mappings:
 
 ---
 
-### `modules/outlet_groups.py`
+#### `modules/outlet_groups.py`
 
 #### FIX-12 — Spa Display Names and Reserved Lounge Delhi
 **Problem:** "SPA Domestic"/"Dom Spa" displayed as "Encalm Spa (T1 Dom)" instead of "Encalm Spa (T3 Dom)". "Reserved Lounge" was incorrectly included in the T3 Arrivals LA22 group.
@@ -107,7 +358,7 @@ Expected mappings:
 
 ---
 
-### `pages/3_Revenue_Comparison.py`
+#### `pages/3_Revenue_Comparison.py`
 
 #### FIX-14 — Multi-Period Snapshot: Merge on (outlet, location)
 **Problem:** The snapshot section merged all periods using `ra.GROUP_COLS = ["segment", "outlet", "location"]`. DB3 old segments vs July "EHPL" caused: segment column blank, PAX (2025) showing 0, AOP showing "--".
@@ -120,7 +371,7 @@ Expected mappings:
 
 ---
 
-### `pages/7_Service_Categories.py`
+#### `pages/7_Service_Categories.py`
 
 #### FIX-16 — Penetration % / SPP Function Mismatch
 **Problem:** `penetration_and_spp_table()` was called for location-level data but requires outlet-level data. Caused crashes and wrong Penetration % calculations.
@@ -128,9 +379,9 @@ Expected mappings:
 
 ---
 
-## Data Files Corrected
+### Data Files Corrected
 
-### Revenue_Jul26_Corrected.xlsx
+#### Revenue_Jul26_Corrected.xlsx
 - Source: PAX & Rev. sheet from Revenue_Dashboardv_2_-_Jul-26.xlsx (Data sheet has corrupted dates 3601-6857)
 - Rows: 1,305
 - Date range: 1 Jul 2026 to 31 Jul 2026
@@ -138,7 +389,7 @@ Expected mappings:
 - Segments: EHPL / Encalm Eats / Sky Plates (correctly assigned per outlet)
 - By segment: EHPL=Rs83.57Cr, Sky Plates=Rs15.27Cr, Encalm Eats=Rs94.4L
 
-### AOP_Clean_FY25-27.xlsx
+#### AOP_Clean_FY25-27.xlsx
 - Source: db_aop.xlsx parsed and verified
 - Rows: 1,080 (45 outlets x 24 months)
 - Coverage: Apr 2025 to Mar 2027 (FY25-26 + FY26-27)
@@ -148,7 +399,7 @@ Expected mappings:
 
 ---
 
-## Upload Order
+### Upload Order
 
 Upload files in this order via Home > Upload:
 
@@ -164,7 +415,7 @@ Upload files in this order via Home > Upload:
 
 ---
 
-## Deployment
+### Deployment
 
 ```powershell
 # Push to GitHub
@@ -185,7 +436,7 @@ python -m streamlit run Home.py
 
 ---
 
-## Segment Reference
+### Segment Reference
 
 | Source Segment | Outlet | Stored As |
 |---|---|---|
