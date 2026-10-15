@@ -302,12 +302,16 @@ with tab_aop:
                 _map = _ar.get("esp_mapping")
                 if _map is not None and not _map.empty:
                     _n_unmatched = int((_map["matched_to_dsr"] == False).sum())
+                    from modules.eats_skyplates_aop_parser import IMPORTED as _IMPORTED
+                    _n_noted = int((_map["result"] != _IMPORTED).sum()) if "result" in _map.columns else 0
                     with st.expander(f"🍽️ Sky Plates / Encalm Eats outlet mapping "
-                                     f"({len(_map)} AOP rows, {_n_unmatched} with no DSR outlet)"):
+                                     f"({len(_map)} AOP rows, {_n_unmatched} with no DSR outlet, "
+                                     f"{_n_noted} not imported)"):
                         _show = _map.rename(columns={
                             "segment": "Segment", "location": "Location", "section": "Section",
                             "aop_name": "AOP name", "dashboard_outlet": "Dashboard outlet",
                             "matched_to_dsr": "Matches DSR outlet", "note": "Note in AOP file",
+                            "result": "Result",
                             "fy26_27_lakhs": "FY26-27 (₹ L)", "excel_row": "Excel row"})
                         st.dataframe(_show, use_container_width=True, hide_index=True)
                 if not _ar["skipped_rows"].empty:

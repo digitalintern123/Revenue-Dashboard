@@ -74,8 +74,8 @@ def test_children_only_no_double_count_and_names():
     res = esp.parse_eats_and_skyplates_aop(_workbook())
     ee = res["aop_rows"][res["aop_rows"]["segment"] == "Encalm Eats"]
     aug = ee[ee["month"] == 8]
-    # heads 3 + 4 + 1 = 8 lakhs; children sum to the same
-    assert aug["aop"].sum() == pytest.approx(8 * 100000)
+    # heads 3 + 4 + 1 = 8 lakhs; children sum to the same, less CDH (2 L, has a note)
+    assert aug["aop"].sum() == pytest.approx(6 * 100000)
     outlets = set(aug["outlet"])
     assert "Chaayos (T3 Arrivals)" in outlets              # not merged into Gate 54
     assert "Chaayos T3 Gate No 54" in outlets
@@ -84,6 +84,57 @@ def test_children_only_no_double_count_and_names():
     assert set(aug[aug["outlet"] == "Event/ODC"]["location"]) == {"Delhi"}
     assert not ee.duplicated(["location", "outlet", "year", "month"]).any()
     assert res["warnings"] == []
+
+
+def test_lines_with_a_note_are_not_imported():
+    res = esp.parse_eats_and_skyplates_aop(_workbook())
+    assert not res["aop_rows"]["outlet"].str.startswith("Cafe Delhi Heights").any()
+    m = res["mapping"]
+    cdh = m[m["aop_name"] == "CDH"].iloc[0]
+    assert cdh["result"].startswith("Not imported") and cdh["note"] == "some note"
+    assert (m[m["aop_name"] != "CDH"]["result"] == esp.IMPORTED).all()
+
+
+def _bhogapuram_workbook():
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.cell(1, 4, 100000)
+    for i, h in enumerate(["Geographical Segment", "Business Segment", "Unit-ID"]):
+        ws.cell(2, 2 + i, h)
+    ws.cell(2, 6, dt.datetime(2026, 9, 1))
+    rows = [("Bhogapuram", "F&B", "Airport Outlets F&B", 10),
+            (None, None, "IndiSip", 1),
+            (None, "Change as per actual", "Starbucks", 2),
+            (None, None, "Starbucks", 3),
+            (None, None, "IndiSip", 4)]
+    for r, (geo, seg, unit, v) in enumerate(rows, start=3):
+        ws.cell(r, 2, geo); ws.cell(r, 3, seg); ws.cell(r, 4, unit); ws.cell(r, 6, v)
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    return buf
+
+
+def test_repeated_names_map_by_occurrence_and_combined_line():
+    rows = esp.parse_eats_and_skyplates_aop(_bhogapuram_workbook())["aop_rows"]
+    by_outlet = dict(zip(rows["outlet"], rows["aop"] / 100000))
+    assert by_outlet == {"IndiSip Café": 1, "Indisip Bistro": 4,
+                         "Starbucks Departure + Starbucks Arrival": 3}
+
+
+def test_combined_aop_split_by_revenue_share():
+    import pandas as pd
+    aop = pd.DataFrame({"location": ["Bhogapuram"] * 2, "business_unit": ["Airport Outlets"] * 2,
+                        "outlet": ["Starbucks Departure + Starbucks Arrival", "KFC (Airport Outlets)"],
+                        "aop": [300.0, 50.0]})
+    act = pd.DataFrame({"outlet": ["Starbucks Departure", "Starbucks Arrival", "Svara"],
+                        "revenue": [200.0, 100.0, 10.0]})
+    out = esp.align_aop_to_outlets(aop, act).set_index("outlet")["aop"]
+    assert out["Starbucks Departure"] == pytest.approx(200)
+    assert out["Starbucks Arrival"] == pytest.approx(100)
+    assert out["KFC (Airport Outlets)"] == 50 and out.sum() == pytest.approx(350)
+    # no sales at either store yet: the line stays whole (shown as a planned outlet)
+    none = esp.align_aop_to_outlets(aop, pd.DataFrame({"outlet": ["Svara", "KFC (Airport Outlets)"],
+                                                       "revenue": [1.0, 2.0]}))
+    assert "Starbucks Departure + Starbucks Arrival" in set(none["outlet"])
 
 
 def test_mismatch_is_reported():

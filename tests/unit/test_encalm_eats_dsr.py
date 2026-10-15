@@ -214,6 +214,27 @@ class TestParseDSR:
         for r in result.records:
             assert r.location == "Bhogapuram"
 
+    def test_bhogapuram_stores_section(self):
+        """"Bhogapuram Store's" is a section total and moves later outlets to Bhogapuram."""
+        buf = _make_dsr_workbook([{
+            "name": "01-09-2026",
+            "date": dt.datetime(2026, 9, 1),
+            "total_covers": 300, "total_rev": 90000,
+            "outlets": [
+                {"name": "Delhi Store's", "covers": 100, "rev": 50000},
+                {"name": "IndiSip T3  - Int. Gate no 32", "covers": 100, "rev": 50000},
+                {"name": "Bhogapuram Store's", "covers": 200, "rev": 40000},
+                {"name": "VTZ INN", "covers": 50, "rev": 15000},
+                {"name": "Svara ", "covers": 150, "rev": 25000},
+            ],
+        }])
+        result = parse_dsr(buf, "test.xlsx")
+        got = {(r.outlet, r.location) for r in result.records}
+        assert got == {("IndiSip T3 - Int. Gate no 32", "Delhi"),
+                       ("VTZ INN", "Bhogapuram"), ("Svara", "Bhogapuram")}
+        assert result.parsed_total_revenue == 90000.0
+        assert not result.warnings
+
     def test_multiple_sheets(self):
         sheets = [
             {"name": f"0{d}-07-2026", "date": dt.datetime(2026, 7, d),

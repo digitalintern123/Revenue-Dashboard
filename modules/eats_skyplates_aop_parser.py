@@ -34,12 +34,22 @@ single "Encalm Eats" row. Any head-vs-children mismatch is reported in
 OUTLET NAMES
 ────────────
 AOP Unit-IDs are mapped to the outlet names the Encalm Eats DSR uses, keyed
-by (section, AOP name) so the same short name in two terminals ("Chaayos" in
-T3 Departures vs T3 Arrivals) can't collide. Only mappings that are clear
-from the DSR's own outlet list are made. Outlets with no DSR counterpart keep
-their AOP name with the section in brackets, e.g. "BAR SHA (T3 Departures)",
-so they are never merged into a different outlet's target. They still count
-in the location total. `mapping` in the result lists every decision.
+by (location, section, AOP name) so the same short name in two terminals
+("Chaayos" in T3 Departures vs T3 Arrivals) can't collide. A name that
+appears twice in one section (two "IndiSip" rows at Bhogapuram) is told
+apart by its occurrence number. Only mappings confirmed against the DSR's
+own outlet list are made. Outlets with no DSR counterpart keep their AOP
+name with the section in brackets, e.g. "BAR SHA (T3 Departures)", so they
+are never merged into a different outlet's target. They still count in the
+location total. `mapping` in the result lists every decision.
+
+One AOP line can cover several DSR outlets (Bhogapuram "Starbucks" = the
+Departure and Arrival stores). It is stored under the outlet names joined by
+" + "; align_aop_to_outlets splits it over those outlets for display.
+
+AOP lines with a note in the Business Segment column ("Put in as other rev",
+"Change as per actual", …) are provisional and are NOT imported. They are
+listed in `mapping` with result "Not imported".
 
 Location "All" (Events & ODCs) is stored under Delhi, because the DSR books
 Event/ODC revenue under Delhi. Change _LOCATION_MAP to move it.
@@ -71,18 +81,36 @@ _SECTION_SEGMENTS = {"ifk": "Sky Plates", "f&b": "Encalm Eats"}
 SKY_PLATES_OUTLET = "Encalm Sky Plates"
 EATS_AGGREGATE_OUTLET = "Encalm Eats"
 
-# (section label, AOP Unit-ID) -> DSR outlet name.  Section label is the
-# head's Unit-ID with a trailing " F&B" removed (see _section_label).
-_DSR_OUTLET_MAP: dict[tuple[str, str], str] = {
-    ("T3 Departures", "chaayos 42a"):      "Chaayos T3 Gate No. 42A",
-    ("T3 Departures", "chaayos 54-55"):    "Chaayos T3 Gate No 54",
-    ("T3 Departures", "indisip 44"):       "IndiSip T3 - Mezzanine Gate 44",
-    ("T3 Departures", "indisip 3"):        "IndiSip T3 - Int. IFK 02, Gate 03",
-    ("T2 Departures", "indisip sha"):      "IndiSip T2 - Bus Gate",
-    ("T2 Departures", "indisip prechk"):   "IndiSip T2 - Pre Checkin",
-    ("T2 Departures", "haldiram prechk"):  "Haldiram T2 Pre Check-in",
-    ("Events & ODCs", "events & odcs"):    "Event/ODC",
+# (location, section label, AOP Unit-ID, occurrence) -> DSR outlet name(s).
+# Section label is the head's Unit-ID with a trailing " F&B" removed (see
+# _section_label); occurrence counts same-named rows within the section from
+# 1. A tuple of names means one AOP line covering several DSR outlets.
+# Names are the DSR parser's canonical names (encalm_eats_dsr_parser).
+_DSR_OUTLET_MAP: dict[tuple[str, str, str, int], str | tuple[str, ...]] = {
+    ("Delhi", "T3 Departures", "chaayos 42a", 1):        "Chaayos T3 Gate No. 42A",
+    ("Delhi", "T3 Departures", "chaayos 54-55", 1):      "Chaayos T3 Gate No 54",
+    ("Delhi", "T3 Departures", "indisip 44", 1):         "IndiSip T3 - Mezzanine Gate 44",
+    ("Delhi", "T3 Departures", "indisip 3", 1):          "IndiSip T3 - Int. IFK 02, Gate 03",
+    ("Delhi", "T3 Departures", "indisip 32-34", 1):      "IndiSip T3 - Int. Gate no 32",
+    ("Delhi", "T3 Arrivals", "cdh", 1):                  "Cafe Delhi Heights T3 Domestic Arrival",
+    ("Delhi", "T2 Departures", "indisip sha", 1):        "IndiSip T2 - Bus Gate",
+    ("Delhi", "T2 Departures", "indisip prechk", 1):     "IndiSip T2 - Pre Checkin",
+    ("Delhi", "T2 Departures", "haldiram prechk", 1):    "Haldiram T2 Pre Check-in",
+    ("Delhi", "T2 Departures", "indisip bar pesc", 1):   "J&B Pour House T2",
+    ("Delhi", "Events & ODCs", "events & odcs", 1):      "Event/ODC",
+    ("Bhogapuram", "Airport Outlets", "mc donald's", 1): "McDonald's- Bhogapuram",
+    ("Bhogapuram", "Airport Outlets", "indisip", 1):     "IndiSip Café",
+    ("Bhogapuram", "Airport Outlets", "indisip", 2):     "Indisip Bistro",
+    ("Bhogapuram", "Airport Outlets", "starbucks", 2):   ("Starbucks Departure", "Starbucks Arrival"),
+    ("Bhogapuram", "Airport Outlets", "south indian culinary house (by encalm eats)", 1): "Svara",
+    ("Bhogapuram", "Airport Outlets", "multi-cuisine concept (by encalm eats)", 1):       "Totally Desi",
 }
+
+# Joins the DSR outlets of an AOP line that covers several of them.
+COMBINED_SEP = " + "
+
+IMPORTED = "Imported"
+NOT_IMPORTED_NOTE = "Not imported — line has a note in the AOP file (figures provisional)"
 
 
 class EatsAOPParseError(Exception):
@@ -217,7 +245,8 @@ def parse_eats_and_skyplates_aop(file_obj) -> dict:
             emit("Sky Plates", "IFK", s["location"], SKY_PLATES_OUTLET, s["head_vals"])
             mapping.append({"segment": "Sky Plates", "location": s["location"], "section": "IFK",
                             "aop_name": s["head_name"], "dashboard_outlet": SKY_PLATES_OUTLET,
-                            "matched_to_dsr": None, "fy26_27_lakhs": round(fy2627(s["head_vals"]), 1),
+                            "matched_to_dsr": None, "note": "", "result": IMPORTED,
+                            "fy26_27_lakhs": round(fy2627(s["head_vals"]), 1),
                             "excel_row": s["head_row"]})
             return
 
@@ -226,7 +255,8 @@ def parse_eats_and_skyplates_aop(file_obj) -> dict:
             emit("Encalm Eats", s["label"], s["location"], EATS_AGGREGATE_OUTLET, s["head_vals"])
             mapping.append({"segment": "Encalm Eats", "location": s["location"], "section": s["label"],
                             "aop_name": s["head_name"], "dashboard_outlet": EATS_AGGREGATE_OUTLET,
-                            "matched_to_dsr": False, "fy26_27_lakhs": round(fy2627(s["head_vals"]), 1),
+                            "matched_to_dsr": False, "note": "", "result": IMPORTED,
+                            "fy26_27_lakhs": round(fy2627(s["head_vals"]), 1),
                             "excel_row": s["head_row"]})
             return
 
@@ -239,19 +269,28 @@ def parse_eats_and_skyplates_aop(file_obj) -> dict:
                     f"{(hv or 0):,.2f} L ≠ sum of outlets {cs:,.2f} L (outlet rows used)."
                 )
 
+        occurrence: dict[str, int] = {}
         seen: dict[str, int] = {}
         for c in children:
-            key = (s["label"], _norm(c["name"]))
-            dsr = _DSR_OUTLET_MAP.get(key)
+            name_lc = _norm(c["name"])
+            occurrence[name_lc] = occurrence.get(name_lc, 0) + 1
+            line = {"segment": "Encalm Eats", "location": s["location"], "section": s["label"],
+                    "aop_name": c["name"], "note": c["note"],
+                    "fy26_27_lakhs": round(fy2627(c["vals"]), 1), "excel_row": c["row"]}
+            if c["note"]:
+                mapping.append({**line, "dashboard_outlet": None, "matched_to_dsr": None,
+                                "result": NOT_IMPORTED_NOTE})
+                continue
+            dsr = _DSR_OUTLET_MAP.get((s["location"], s["label"], name_lc, occurrence[name_lc]))
+            if isinstance(dsr, tuple):
+                dsr = COMBINED_SEP.join(dsr)
             outlet = dsr or f"{c['name']} ({s['label']})"
             seen[outlet] = seen.get(outlet, 0) + 1
-            if seen[outlet] > 1:   # e.g. two "Starbucks" rows at Bhogapuram
+            if seen[outlet] > 1:   # e.g. two unmatched "Starbucks" rows in one section
                 outlet = f"{outlet} #{seen[outlet]}"
             emit("Encalm Eats", s["label"], s["location"], outlet, c["vals"])
-            mapping.append({"segment": "Encalm Eats", "location": s["location"], "section": s["label"],
-                            "aop_name": c["name"], "dashboard_outlet": outlet,
-                            "matched_to_dsr": bool(dsr), "note": c["note"],
-                            "fy26_27_lakhs": round(fy2627(c["vals"]), 1), "excel_row": c["row"]})
+            mapping.append({**line, "dashboard_outlet": outlet, "matched_to_dsr": bool(dsr),
+                            "result": IMPORTED})
 
     for r in range(layout["header_row"] + 1, ws.max_row + 1):
         geo = ws.cell(r, gcol).value
@@ -372,11 +411,16 @@ def align_aop_to_outlets(aop_df: Optional[pd.DataFrame],
     of the AOP outlets match it, the location's whole AOP is placed on that
     outlet so the table shows target vs actual. Otherwise AOP is returned
     unchanged (outlet-level DSR data matches outlet-level AOP by name).
+
+    An AOP line covering several outlets ("Starbucks Departure + Starbucks
+    Arrival") is first split over those of its outlets that have sales, in
+    proportion to their revenue, so their combined target is unchanged.
     """
     if aop_df is None or aop_df.empty:
         return None
     if actual_df is None or actual_df.empty or "outlet" not in actual_df.columns:
         return aop_df
+    aop_df = _split_combined_aop(aop_df, actual_df)
     actual_outlets = set(actual_df["outlet"].astype(str).str.strip())
     if actual_outlets & set(aop_df["outlet"].astype(str)):
         return aop_df
@@ -386,3 +430,29 @@ def align_aop_to_outlets(aop_df: Optional[pd.DataFrame],
         out["outlet"] = only
         return out.groupby(["location", "outlet"], as_index=False)["aop"].sum()
     return aop_df
+
+
+def _split_combined_aop(aop_df: pd.DataFrame, actual_df: pd.DataFrame) -> pd.DataFrame:
+    """Spread each combined AOP line over its outlets present in `actual_df`
+    (by revenue share; equally if none has revenue). Lines whose outlets have
+    no rows are left as they are."""
+    combined = aop_df["outlet"].astype(str).str.contains(COMBINED_SEP, regex=False)
+    if not combined.any():
+        return aop_df
+    act = actual_df.assign(outlet=actual_df["outlet"].astype(str).str.strip())
+    rev = (pd.to_numeric(act["revenue"], errors="coerce").fillna(0).groupby(act["outlet"]).sum()
+           if "revenue" in act.columns else pd.Series(0.0, index=act["outlet"].unique()))
+
+    rows = []
+    for rec in aop_df.to_dict("records"):
+        parts = [p for p in str(rec["outlet"]).split(COMBINED_SEP) if p in rev.index]
+        if COMBINED_SEP not in str(rec["outlet"]) or not parts:
+            rows.append(rec)
+            continue
+        total = float(rev[parts].sum())
+        for p in parts:
+            share = float(rev[p]) / total if total > 0 else 1 / len(parts)
+            rows.append({**rec, "outlet": p, "aop": rec["aop"] * share})
+    out = pd.DataFrame(rows, columns=aop_df.columns)
+    keys = [c for c in out.columns if c != "aop"]
+    return out.groupby(keys, as_index=False, dropna=False)["aop"].sum()
