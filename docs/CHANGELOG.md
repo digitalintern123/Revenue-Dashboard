@@ -8,6 +8,9 @@ names and file paths in them may no longer exist).
 ## Version 2.7.0 (October 2026) — every line item, Windows server operations
 
 ### Imports
+- **Historical Import tab removed** from Upload Data. Full revenue workbooks
+  are uploaded in the *Daily Revenue* tab (same parser, batched saving above
+  5,000 rows).
 - **Rows not imported report.** Revenue uploads list every line left out (or
   imported without revenue/PAX) with its Excel row and reason, plus a CSV
   download (`modules/import_report.py`).

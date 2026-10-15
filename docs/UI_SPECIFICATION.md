@@ -45,8 +45,9 @@ compare, location)` ("Showing … vs … · location"), `ui.field_label`.
 
 ## 2. Upload Data (`views/Uploads.py`, `/Uploads`, default page)
 
-Tabs (`key="upload_tabs"`): **Daily Revenue** · **Historical Import** ·
-**AOP Targets** · **Traffic** · **Database**.
+Tabs (`key="upload_tabs"`): **Daily Revenue** · **AOP Targets** · **Traffic**
+· **Database**. (The separate *Historical Import* tab was removed — Daily
+Revenue takes full workbooks too; above 5,000 rows it saves in batches.)
 
 - File uploader → sheet selector per workbook (auto-detect option) → action
   button (rate-limited for revenue).

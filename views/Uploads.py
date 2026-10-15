@@ -26,11 +26,11 @@ from modules.app_logger import safe_run
 def _check_rate_limit():
     return database.check_upload_rate_limit(_current_user() or "")
 
-tab_rev, tab_hist, tab_aop, tab_traffic, tab_db = st.tabs(
-    ["Daily Revenue", "Historical Import", "AOP Targets", "Traffic", "Database"],
+tab_rev, tab_aop, tab_traffic, tab_db = st.tabs(
+    ["Daily Revenue", "AOP Targets", "Traffic", "Database"],
     key="upload_tabs",
 )
-ui.tab_icons("upload_tabs", ["receipt", "archive", "target", "plane", "database"])
+ui.tab_icons("upload_tabs", ["receipt", "target", "plane", "database"])
 
 # ─────────────────────────────────────────────────────────────────────────────
 # SECTION 1 — Daily Revenue Upload
@@ -92,85 +92,7 @@ with tab_rev:
             st.rerun()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SECTION 2 — Historical Excel Import
-# ─────────────────────────────────────────────────────────────────────────────
-with tab_hist:
-    st.caption("Bulk-import a historical revenue workbook — sheet and format auto-detected.")
-
-    hist_files = st.file_uploader("Upload workbook(s)", type=["xlsx","xls"],
-        key="up_historical", accept_multiple_files=True)
-    hist_chosen_sheets = {}
-    if hist_files:
-        from modules import excel_parser
-        for i, hist_file in enumerate(hist_files):
-            upload_status.render_file_selected(hist_file.name, getattr(hist_file,"size",None))
-            hist_sheet_names = upload_status.get_sheet_names(hist_file)
-            if hist_sheet_names:
-                hist_chosen_sheets[hist_file.name] = upload_status.render_sheet_selector(
-                    hist_file.name, hist_sheet_names, key_prefix=f"up_hist_{i}",
-                    label=f"📑 Sheet for **{hist_file.name}**", allow_auto_detect=True)
-
-    if st.button("📥 Import Historical Data", disabled=not hist_files) and hist_files:
-        pending_hist = []
-        _hist_latest = None
-        for hist_file in hist_files:
-            _bytes = hist_file.read()
-            _name  = hist_file.name
-            _sheet = hist_chosen_sheets.get(_name)
-            st.info(f"📂 Parsing **{_name}** ({len(_bytes)/1024/1024:.1f} MB)…")
-            with st.spinner("🔍 Detecting layout…"):
-                result = data_processor.process_uploaded_file(
-                    _io.BytesIO(_bytes), _name, save_to_db=False, excel_sheet_name=_sheet)
-            if not result.success or result.df is None:
-                st.error(f"❌ Parse failed: {result.message}")
-                pending_hist.append(result)
-                continue
-            st.success(f"✅ Parsed **{len(result.df):,} rows** — saving…")
-            _prog = st.progress(0.0, text="Saving…")
-            _stat = st.empty()
-            def _on_prog(pct, msg):
-                _prog.progress(pct, text=f"💾 {msg}")
-                _stat.caption(msg)
-            try:
-                save_result = database.save_dataframe_batched_v2(
-                    result.df, source_file=_name, progress_callback=_on_prog)
-                _prog.progress(1.0, text="✅ Done!")
-                _stat.empty()
-                result = data_processor.ProcessResult(
-                    success=True, file_name=_name, stage="saving",
-                    message=(f"Parsed {len(result.df):,} rows. "
-                             f"{save_result['inserted']:,} new, {save_result['skipped']:,} skipped."),
-                    df=result.df, report_date=result.report_date,
-                    inserted=save_result["inserted"], skipped=save_result["skipped"],
-                    warnings=result.warnings, skipped_rows=result.skipped_rows)
-            except Exception as _exc:
-                _prog.empty()
-                result = data_processor.ProcessResult(
-                    success=False, file_name=_name, stage="saving",
-                    message=f"Parsed OK but save failed: {_exc}")
-            pending_hist.append(result)
-            if result.success and result.report_date and (
-                    _hist_latest is None or result.report_date > _hist_latest):
-                _hist_latest = result.report_date
-        if _hist_latest:
-            set_active_date(_hist_latest)
-        st.session_state["_up_hist_results"] = pending_hist
-        clear_data_cache()  # new data must show on every page immediately
-        st.rerun()
-
-    if "_up_hist_results" in st.session_state:
-        for _r in st.session_state["_up_hist_results"]:
-            upload_status.render_result_from_process_result(
-                _r, expected_format=upload_status.FORMAT_HISTORICAL_EXCEL)
-            if _r.success and _r.df is not None:
-                with st.expander(f"📋 Preview — {_r.file_name}", expanded=True):
-                    st.dataframe(_r.df, use_container_width=True)
-        if st.button("✖️ Dismiss", key="up_hist_dismiss"):
-            del st.session_state["_up_hist_results"]
-            st.rerun()
-
-# ─────────────────────────────────────────────────────────────────────────────
-# SECTION 3 — AOP Import
+# SECTION 2 — AOP Import
 # ─────────────────────────────────────────────────────────────────────────────
 with tab_aop:
     st.caption("Upload the AOP budget workbook — monthly or daily formats auto-detected.")
@@ -326,7 +248,7 @@ with tab_aop:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SECTION 4 — Traffic Import
+# SECTION 3 — Traffic Import
 # ─────────────────────────────────────────────────────────────────────────────
 with tab_traffic:
     st.caption("Upload airport traffic files — all formats auto-detected.")
@@ -396,7 +318,7 @@ with tab_traffic:
             st.rerun()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SECTION 5 — Database Stats
+# SECTION 4 — Database Stats
 # ─────────────────────────────────────────────────────────────────────────────
 with tab_db:
     with safe_run("Database stats", error_type="db_error"):

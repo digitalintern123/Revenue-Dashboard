@@ -14,7 +14,7 @@ variance, penetration and spend-per-pax by location, outlet and period.
 
 | Page | Address | What it is for |
 |---|---|---|
-| Upload Data | `/Uploads` (default) | Daily revenue, historical import, AOP targets, traffic, database stats |
+| Upload Data | `/Uploads` (default) | Revenue (daily or full workbook), AOP targets, traffic, database stats |
 | Previous Uploads | `/Previous_Uploads` | Upload history, dates in the database, preview, choose the active date |
 | EHPL | `/EHPL` | Outlet table per location with sections, totals, AOP, PEN %, SPP; terminal table |
 | Encalm Eats | `/Encalm_Eats` | Outlet table from the DSR (or the revenue upload), AOP per outlet; DSR upload tab |

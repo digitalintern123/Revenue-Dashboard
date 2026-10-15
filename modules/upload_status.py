@@ -1,6 +1,6 @@
 """
 upload_status.py — Shared, consistent upload-status feedback for every file
-upload point in the app (daily reports, historical import, AOP import,
+upload point in the app (revenue reports, AOP import,
 traffic import).
 
 Every upload should show the same sequence so the user always knows
@@ -203,12 +203,6 @@ FORMAT_DAILY_REPORT = """\
 | AOP | optional | 50000 |
 | Traffic | optional | 50000 |
 """
-
-FORMAT_HISTORICAL_EXCEL = FORMAT_DAILY_REPORT + (
-    "\nFor a bulk historical workbook, this can be any sheet in the file "
-    "(named anything) — it's detected automatically by looking for a row "
-    "with these headers, not by sheet name."
-)
 
 FORMAT_AOP = """\
 One of three layouts, auto-detected — no need to say which one you're uploading:
