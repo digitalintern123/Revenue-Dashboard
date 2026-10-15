@@ -110,3 +110,26 @@ def test_may26_hyd_layout_heading_above_departure_column():
     t = _totals(tp.parse_traffic_auto(buf, "may.xlsx"))
     assert t[("Hyderabad", "Domestic")] == 300 * DAYS
     assert t[("Hyderabad", "International")] == 30 * DAYS
+
+
+@pytest.mark.parametrize("measures", [("PAX", "Flights"), ("ATMs", "PAX")])
+def test_hyd_layout_reads_pax_not_flights(measures):
+    """Apr-26 template: per side PAX Arr/Dep then Flights Arr/Dep; older
+    template: ATMs before PAX. Only the PAX columns are traffic."""
+    first, second = measures
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Hyd Traf"
+    ws.append([dt.datetime(2026, 4, 1)])
+    ws.append([None, "Domestic", None, None, None, "International", None, None, None])
+    ws.append([None, first, None, second, None, first, None, second, None])
+    ws.append(["Date"] + ["Arrival", "Departure"] * 4)
+    pax_dom, pax_int, small = (100, 200), (10, 20), (2, 3)
+    for d in range(1, DAYS + 1):
+        dom = (pax_dom + small) if first == "PAX" else (small + pax_dom)
+        intl = (pax_int + small) if first == "PAX" else (small + pax_int)
+        ws.append([dt.datetime(2026, 4, d), *dom, *intl])
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    t = _totals(tp.parse_traffic_auto(buf, "apr.xlsx"))
+    assert t[("Hyderabad", "Domestic")] == 300 * DAYS
+    assert t[("Hyderabad", "International")] == 30 * DAYS

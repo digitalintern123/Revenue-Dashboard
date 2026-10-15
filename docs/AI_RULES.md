@@ -7,7 +7,7 @@ because breaking it caused a real bug.
 
 ## A. Before and after every change
 
-1. **Run the tests:** `python -m pytest tests -q` → **270 passed**. Never
+1. **Run the tests:** `python -m pytest tests -q` → **272 passed**. Never
    skip, disable or loosen a test to make it pass.
 2. **Check the running app** for UI changes (`streamlit run Home.py`, sign in,
    open the page you touched) — tests do not render pages.

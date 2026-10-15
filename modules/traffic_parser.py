@@ -1023,10 +1023,28 @@ def _parse_hyd_side_by_side(file_obj) -> Optional[pd.DataFrame]:
                 date_col_s = _ci
                 break
 
+        # Columns under a "Flights" / "ATMs" heading count aircraft, not
+        # passengers. Some templates put them after the PAX columns (Apr-26:
+        # PAX Arr/Dep, Flights Arr/Dep per side), so they must be skipped
+        # rather than relying on PAX coming last.
+        non_pax_cols = set()
+        for _ri in range(0, arrdep_ri):
+            _measure = None
+            for _ci in range(n_cols_h):
+                v = header_rows_h[_ri][_ci] if _ci < len(header_rows_h[_ri]) else None
+                if pd.notna(v) and isinstance(v, str) and v.replace('\xa0', '').strip():
+                    s = v.replace('\xa0', '').strip().lower()
+                    if 'flight' in s or 'atm' in s:
+                        _measure = 'other'
+                    elif 'pax' in s or _classify_type_hyd(s):
+                        _measure = None      # PAX, or a new Domestic/International block
+                if _measure == 'other':
+                    non_pax_cols.add(_ci)
+
         # Map arr/dep columns per type using arrdep_row
         for _ci in range(n_cols_h):
             _t = col_type_h.get(_ci)
-            if not _t:
+            if not _t or _ci in non_pax_cols:
                 continue
             _a = str(arrdep_row[_ci]).replace('\xa0','').strip().lower()                 if _ci < len(arrdep_row) and pd.notna(arrdep_row[_ci]) else ''
             if _a in ('arrival', 'arr', 'arr.'):
