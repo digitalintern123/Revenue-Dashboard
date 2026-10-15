@@ -104,7 +104,7 @@ GOA_SECTIONS = {
 
 BHOGAPURAM_SECTIONS = {
     # Bhogapuram only has these EHPL outlets
-    "LOUNGES":          ["Domestic Lounge", "International Lounge"],
+    "LOUNGES":          ["Domestic Lounge", "International Lounge", "Reserved Lounge"],
     "ATITHYA SERVICES": ["Atithya"],
     "PORTER":           ["Porter"],
     "ENWRAP":           ["Baggage Wrapping"],
@@ -206,13 +206,10 @@ def _build_table_rows(
             section_outlets.setdefault(sec, []).append(row)
             continue
 
-        # Fallback name-based detection for older data not yet in group keys
-        if _is_bc(perf):
-            section_outlets.setdefault("OTHERS", []).append(row)
-        elif _is_rdc(perf):
-            section_outlets.setdefault("OTHERS", []).append(row)
-        elif _is_airport_lodge(perf):
-            section_outlets.setdefault("OTHERS", []).append(row)
+        # Outlets in no section (new names, outlets the layout doesn't list)
+        # still show — under OTHERS — so every line item and its revenue is
+        # in the table and the section totals add up to TOTAL EHPL.
+        section_outlets.setdefault("OTHERS", []).append(row)
 
     grand_row = next(
         (r for r in all_rows if r.get("_is_grand") and r.get("_is_subtotal")),
@@ -561,6 +558,10 @@ def render_ehpl_location(
     if not all_rows:
         st.info(f"No EHPL data for {location} in this period.")
         return
+
+    if cmp_label == cur_label:
+        # Same period picked twice: keep the column names unique so the table renders
+        cmp_label = f"{cmp_label} (compare)"
 
     loc_norm = location.title()
     if loc_norm == "Delhi":

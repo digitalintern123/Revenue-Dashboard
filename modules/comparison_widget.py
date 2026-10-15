@@ -185,12 +185,15 @@ def _render_compare_controls(
             )
         available_years = cached_db.get_available_years()
         # All years available — including the current year
-        other_years = available_years or [anchor_date.year - 1]
+        other_years = sorted(available_years or [anchor_date.year - 1], reverse=True)
+        # Default to the year before the report year (comparing a year with
+        # itself shows nothing useful); the current year stays selectable.
+        _prev = anchor_date.year - 1
         with year_col:
             compare_year = st.selectbox(
                 "Compare Year",
-                options=sorted(other_years, reverse=True),
-                index=0,
+                options=other_years,
+                index=other_years.index(_prev) if _prev in other_years else 0,
                 key=f"{key_prefix}_year_year",
             )
 

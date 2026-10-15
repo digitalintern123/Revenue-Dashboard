@@ -3024,6 +3024,19 @@ def get_available_dates() -> list[dt.date]:
         session.close()
 
 
+def get_available_dates_for_segment(segment: str) -> list[dt.date]:
+    """Distinct revenue_master dates that have rows for `segment`, ascending."""
+    session = SessionLocal()
+    try:
+        rows = session.execute(
+            select(RevenueMaster.date).where(RevenueMaster.segment == segment)
+            .distinct().order_by(RevenueMaster.date)
+        ).all()
+        return [r[0] for r in rows]
+    finally:
+        session.close()
+
+
 def get_available_locations_for_range(
     start_date: "dt.date",
     end_date: "dt.date",

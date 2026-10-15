@@ -69,6 +69,12 @@ def get_traffic_total_for_range(
 
 
 @st.cache_data(ttl=_TTL, show_spinner=False)
+def get_available_dates_for_segment(segment: str) -> list[dt.date]:
+    """Cached: revenue dates that have rows for one segment."""
+    return database.get_available_dates_for_segment(segment)
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
 def get_available_traffic_dates() -> list[dt.date]:
     """Cached: distinct traffic dates, sorted ascending."""
     return database.get_available_traffic_dates()
@@ -134,7 +140,7 @@ database._traffic_totals_loader = _cached_traffic_totals
 _ALL_CACHED = (
     get_available_dates, load_for_date_range, load_for_date,
     load_aop_targets_for_range, load_traffic_for_date_range,
-    get_traffic_total_for_range, get_available_traffic_dates,
+    get_traffic_total_for_range, get_available_traffic_dates, get_available_dates_for_segment,
     get_available_week_starts, get_available_year_months, get_available_years,
     load_encalm_eats_dsr_for_range, get_encalm_eats_dsr_dates,
     get_upload_history, get_dates_summary, get_db_stats, load_segment_aop,

@@ -266,6 +266,21 @@ LOCATION_DISPLAY_OVERRIDES: dict[str, dict[str, str]] = {
         "Encalm Lounge (T3 DL023 &4)":    "Domestic Lounge",
         "Encalm Lounge (T3 INT)":          "International Lounge",
     },
+    "Bhogapuram": {
+        # Bhogapuram uses plain names; never the Delhi lounge names.
+        "Domestic Lounge":                 "Domestic Lounge",
+        "Domestic Lounge T3":              "Domestic Lounge",
+        "International Lounge":            "International Lounge",
+        "Reserved Lounge":                 "Reserved Lounge",
+        "Reserve Lounges":                 "Reserved Lounge",
+        "Meet & Greet":                    "Atithya",
+        "Welcome & Assist":                "Atithya",
+        "Baggage Wrapping":                "Baggage Wrapping",
+        "Enwrap Services":                 "Baggage Wrapping",
+        "Enwrap":                          "Baggage Wrapping",
+        "Encalm Lounge (T3 DL023 &4)":    "Domestic Lounge",
+        "Encalm Lounge (T3 INT)":          "International Lounge",
+    },
 }
 
 # ---------------------------------------------------------------------------
@@ -585,6 +600,9 @@ BHOGAPURAM_GROUPS: dict[str, list[str]] = {
     "International Lounge": [
         "International Lounge",
     ],
+    "Reserved Lounge": [
+        "Reserved Lounge", "Reserve Lounges", "Reserved Lounges",
+    ],
     "Atithya": [
         "Atithya", "Meet & Greet", "Welcome & Assist",
     ],
@@ -597,7 +615,7 @@ BHOGAPURAM_GROUPS: dict[str, list[str]] = {
 }
 
 BHOGAPURAM_SUBTOTALS: list[tuple] = [
-    ("TOTAL EHPL", ["Domestic Lounge", "International Lounge",
+    ("TOTAL EHPL", ["Domestic Lounge", "International Lounge", "Reserved Lounge",
                     "Atithya", "Porter", "Baggage Wrapping"]),
 ]
 
@@ -606,6 +624,7 @@ BHOGAPURAM_ROW_ORDER: list[str] = [
     "Porter",
     "Domestic Lounge",
     "International Lounge",
+    "Reserved Lounge",
     "Baggage Wrapping",
     "TOTAL EHPL",
 ]

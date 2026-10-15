@@ -49,7 +49,12 @@ with tab_analytics:
     except Exception:
         dsr_dates = []
 
-    eats_dates = dsr_dates if dsr_dates else cached_db.get_available_dates()
+    # Days with a DSR plus days with Encalm Eats lines from the revenue upload
+    try:
+        rev_eats_dates = cached_db.get_available_dates_for_segment(segment)
+    except Exception:
+        rev_eats_dates = []
+    eats_dates = sorted({pd.Timestamp(d).date() for d in list(dsr_dates) + list(rev_eats_dates)})
 
     if not eats_dates:
         st.warning(
@@ -100,23 +105,39 @@ with tab_analytics:
             df = df[df["location"].str.title() == loc.title()]
         return df
 
-    use_dsr = not dsr_cur.empty
+    # Per location and day: DSR outlet rows when that day has a DSR, otherwise
+    # the aggregated "Encalm Eats" row from the revenue upload — never both,
+    # so nothing is counted twice and no location or day is left out.
+    def _seg_filter(df):
+        if df.empty or "segment" not in df.columns:
+            return df
+        return df[df["segment"] == segment].copy()
 
-    if use_dsr:
-        seg_cur = _normalise_dsr(dsr_cur, location)
-        seg_cmp = _normalise_dsr(dsr_cmp, location) if not dsr_cmp.empty else pd.DataFrame()
+    def _day_keys(df):
+        return set(zip(df["location"].astype(str).str.strip().str.title(),
+                       pd.to_datetime(df["date"]).dt.date))
+
+    def _combine(dsr_df, rev_df):
+        dsr_df = _normalise_dsr(dsr_df, location)
+        rev_df = _seg_filter(_filter_by_location(rev_df, location)) if not rev_df.empty else rev_df
+        if dsr_df.empty:
+            return rev_df, 0, len(rev_df)
+        if rev_df.empty:
+            return dsr_df, len(dsr_df), 0
+        covered = _day_keys(dsr_df)
+        keep = [k not in covered for k in zip(rev_df["location"].astype(str).str.strip().str.title(),
+                                               pd.to_datetime(rev_df["date"]).dt.date)]
+        rev_df = rev_df[keep]
+        return pd.concat([dsr_df, rev_df], ignore_index=True), len(dsr_df), len(rev_df)
+
+    seg_cur, _n_dsr, _n_rev = _combine(dsr_cur, current_df_all)
+    seg_cmp, _, _ = _combine(dsr_cmp, compare_df_all)
+    if _n_dsr and _n_rev:
+        data_source_note = ("📋 Outlet-level data from the uploaded DSR; days or locations without "
+                            "a DSR show the Encalm Eats total from the revenue upload.")
+    elif _n_dsr:
         data_source_note = "📋 Showing outlet-level data from uploaded DSR."
     else:
-        # Fall back to revenue_master (aggregated)
-        def _seg_filter(df):
-            if df.empty or "segment" not in df.columns:
-                return df
-            return df[df["segment"] == segment].copy()
-
-        loc_cur = _filter_by_location(current_df_all, location)
-        loc_cmp = _filter_by_location(compare_df_all, location)
-        seg_cur = _seg_filter(loc_cur)
-        seg_cmp = _seg_filter(loc_cmp) if not loc_cmp.empty else pd.DataFrame()
         data_source_note = (
             "⚠️ No DSR data for this period — showing aggregated data from revenue upload. "
             "Upload the Master DSR in the **Upload DSR** tab for outlet-level breakdown."
