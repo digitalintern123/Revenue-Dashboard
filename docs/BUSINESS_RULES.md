@@ -67,8 +67,15 @@ Reserved Lounge, GAT, Airport Lodge → International; Prive (Hyderabad),
 Atithya → Main Terminal; Enwrap, Porter → All. Transit Hotel (Hyderabad) and
 CIP Lounge (Goa) have no traffic pool.
 
-**Bhogapuram:** no terminal mapping yet — PEN % and SPP show "—"
-(see KNOWN_ISSUES).
+**Bhogapuram:** same scheme as Hyderabad — Domestic Lounge → Domestic;
+International Lounge, Reserved Lounge → International; Atithya, Porter,
+Enwrap → All (Domestic + International); anything else → Main Terminal
+(whole airport).
+
+**Location total (Traffic KPI card):** each location's stored terminal rows
+added once (`database.join_revenue_with_traffic`) — Delhi's 8 pools,
+Domestic + International elsewhere. Adding outlet pools would double-count,
+because the whole-airport pool already contains the others.
 
 **Subtotals** (`business_dashboard._subtotal_traffic`): one shared pool →
 that value; a group containing Atithya (whole airport) → the maximum;

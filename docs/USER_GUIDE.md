@@ -28,7 +28,7 @@ several sheets you can pick the sheet or leave it on auto-detect.
 | **Daily Revenue** | The daily revenue report (Excel, PDF, CSV and more) | Usual daily upload. |
 | **Historical Import** | A big revenue workbook (e.g. the "Revenue Dashboard" file with the long *Data* sheet) | For loading many months at once. |
 | **AOP Targets** | The AOP master workbook | Leave **"Replace existing AOP for the months in this file"** ticked so a corrected file overwrites old targets. |
-| **Traffic** | Airport traffic workbooks (.xlsx/.xls) | Needed for PEN % and SPP. |
+| **Traffic** | Airport traffic workbooks (.xlsx/.xls), e.g. one sheet per airport (Delhi, Hyd, Goa, Vizag) | Needed for PEN % and SPP. Any sheet that gives no rows is listed in a warning — check it before relying on the figures. |
 | **Database** | — | Shows what is stored. |
 
 The **Encalm Eats DSR** (Master DSR and Starbucks & McD files) is uploaded on

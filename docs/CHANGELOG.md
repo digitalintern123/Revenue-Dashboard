@@ -67,10 +67,21 @@ names and file paths in them may no longer exist).
 - SQLite: `DATA_DIR`, WAL mode, daily online backups (`data/backups`, 7 kept),
   `scripts/migrate_to_sqlite.py`.
 
+### Traffic
+- Delhi day-grid sheets with the month as a date in A1 (Sep-2026 file) are
+  read; before, the whole Delhi sheet was skipped.
+- Vizag / VTZ / Bhogapuram sheets in the Hyderabad layout are read as
+  **Bhogapuram**; Bhogapuram outlets are mapped to Domestic / International /
+  whole-airport traffic, so its PEN % and SPP work.
+- The Traffic tab warns about every sheet that produced no rows (the Sep file
+  had shown "120 rows parsed" with Delhi and Vizag missing).
+- Traffic KPI card: whole-airport traffic per location counted once (it was
+  adding the whole-airport pool to the terminal pools — about double).
+
 ### Docs
 - Documentation rewritten for the current app; new
   [USER_GUIDE.md](USER_GUIDE.md) and [SERVER_RUNBOOK.md](SERVER_RUNBOOK.md).
-  Tests: 255.
+  Tests: 268.
 
 ## Version 2.6.0 (October 2026) — hosting, Encalm branding, speed
 

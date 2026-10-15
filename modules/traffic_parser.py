@@ -49,11 +49,12 @@ COLUMN_ALIASES = {
     ],
 }
 
-_KNOWN_LOCATIONS = {"delhi", "hyderabad", "goa"}
+_KNOWN_LOCATIONS = {"delhi", "hyderabad", "goa", "bhogapuram"}
 _LOCATION_NORMALIZATION = {
     "delhi": "Delhi", "del": "Delhi",
     "hyderabad": "Hyderabad", "hyd": "Hyderabad",
     "goa": "Goa", "gox": "Goa", "goi": "Goa",
+    "bhogapuram": "Bhogapuram", "vizag": "Bhogapuram", "vtz": "Bhogapuram",
 }
 
 # Sheet-name -> location for the cross-tab format, where each sheet is
@@ -63,6 +64,9 @@ _SHEET_NAME_TO_LOCATION = {
     "hyd": "Hyderabad",
     "gox": "Goa",
     "goa": "Goa",
+    "vizag": "Bhogapuram",
+    "vtz": "Bhogapuram",
+    "bhogapuram": "Bhogapuram",
 }
 
 # Segment-name -> canonical terminal, for the Delhi sheet's column groups.
@@ -284,6 +288,7 @@ def parse_traffic_auto(file_obj, source_file: str = "traffic.xlsx") -> pd.DataFr
         combined = combined.drop_duplicates(
             subset=["date", "location", "terminal", "granularity"], keep="last"
         ).reset_index(drop=True)
+        combined.attrs["skipped_sheets"] = _skipped_sheets(file_obj, combined)
         return combined
 
     if hasattr(file_obj, "seek"):
@@ -306,6 +311,54 @@ def parse_traffic_auto(file_obj, source_file: str = "traffic.xlsx") -> pd.DataFr
     if hasattr(file_obj, "seek"):
         file_obj.seek(0)
     return parse_traffic_simple(file_obj, match)
+
+
+def _sheet_location(sheet_name: str) -> Optional[str]:
+    """Location named by a sheet's name ("Delhi", "HYD Traffic", "Vizag"), or None."""
+    key = sheet_name.strip().lower()
+    if key in _SHEET_NAME_TO_LOCATION:
+        return _SHEET_NAME_TO_LOCATION[key]
+    for pat, canon in _LOCATION_KEYWORD_PATTERNS:
+        if pat.search(sheet_name):
+            return canon
+    return None
+
+
+def _skipped_sheets(file_obj, parsed: pd.DataFrame) -> list[str]:
+    """
+    Sheets that produced no traffic rows, as messages for the upload screen,
+    so a workbook that is only partly understood is never imported silently.
+
+    A sheet named after an airport counts as skipped when no rows for that
+    airport were parsed. Sheets with no airport in their name (e.g. a flat
+    "Data" sheet with a Location column) are only listed when every parsed
+    airport is already accounted for by a named sheet.
+    """
+    if hasattr(file_obj, "seek"):
+        file_obj.seek(0)
+    try:
+        xl = pd.ExcelFile(file_obj, engine="openpyxl")
+    except Exception:
+        return []
+    found = set(parsed["location"].astype(str)) if parsed is not None and not parsed.empty else set()
+    named, unnamed = {}, []
+    for sheet in xl.sheet_names:
+        try:
+            if pd.read_excel(xl, sheet_name=sheet, header=None, nrows=5).dropna(how="all").empty:
+                continue                      # blank sheet — nothing to import
+        except Exception:
+            continue
+        loc = _sheet_location(sheet)
+        if loc:
+            named[sheet] = loc
+        else:
+            unnamed.append(sheet)
+    out = [f"Sheet '{s}' ({loc}): no traffic rows imported — layout not recognised"
+           for s, loc in named.items() if loc not in found]
+    if found and found <= set(named.values()):
+        out += [f"Sheet '{s}': not imported — no airport in the sheet name and layout not recognised"
+                for s in unnamed]
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -867,7 +920,8 @@ def _parse_flat_export_format(file_obj) -> Optional[pd.DataFrame]:
 
 def _parse_hyd_side_by_side(file_obj) -> Optional[pd.DataFrame]:
     """
-    Parse Hyderabad traffic files with the split side-by-side layout:
+    Parse Hyderabad (and Bhogapuram / Vizag) traffic files with the split
+    side-by-side layout:
       LEFT:  HYD Domestic  — DATE col, ATMs cols, PAX Arr/Dep/Total cols
       RIGHT: HYD International — DATE col, ATMs cols, PAX Arr/Dep/Total cols
 
@@ -888,7 +942,15 @@ def _parse_hyd_side_by_side(file_obj) -> Optional[pd.DataFrame]:
     except Exception:
         return None
 
-    hyd_sheets = [s for s in xl.sheet_names if 'hyd' in s.lower()]
+    # Hyderabad and Bhogapuram (Vizag) send the same layout.
+    sheet_location = {}
+    for s in xl.sheet_names:
+        low = s.lower()
+        if 'hyd' in low:
+            sheet_location[s] = 'Hyderabad'
+        elif any(k in low for k in ('vizag', 'vtz', 'bhogapuram')):
+            sheet_location[s] = 'Bhogapuram'
+    hyd_sheets = list(sheet_location)
     if not hyd_sheets:
         return None
 
@@ -1009,7 +1071,7 @@ def _parse_hyd_side_by_side(file_obj) -> Optional[pd.DataFrame]:
                 if found:
                     records.append({
                         'date': row_date, 'period_end': pd.NaT,
-                        'granularity': 'daily', 'location': 'Hyderabad',
+                        'granularity': 'daily', 'location': sheet_location[sheet_name],
                         'terminal': type_label, 'traffic': total,
                     })
 
@@ -1578,11 +1640,13 @@ _LOCATION_KEYWORD_SCAN: list[tuple[str, str]] = [
     # "goa" before the short codes so we don't need a word-boundary for it
     # (it never appears as a substring of another word in airport context).
     ("goa", "Goa"),
+    ("bhogapuram", "Bhogapuram"), ("vizag", "Bhogapuram"),
     # Short IATA-style codes — matched as whole words to avoid e.g.
     # "DELHI" matching "del" as a prefix.
     (r"\bdel\b", "Delhi"),
     (r"\bhyd\b", "Hyderabad"),
     (r"\bgox\b", "Goa"), (r"\bgoi\b", "Goa"),
+    (r"\bvtz\b", "Bhogapuram"),
 ]
 _LOCATION_KEYWORD_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(pat, re.IGNORECASE), canon)
@@ -1712,7 +1776,8 @@ def _infer_month_from_context(raw: pd.DataFrame, sheet_name: str = "") -> Option
             if parsed is not None:
                 return parsed
 
-    # 2. Title rows inside the sheet.
+    # 2. Title rows inside the sheet: a label ("May-26") or a real date
+    #    (e.g. 01-09-2026 in A1 above a Day 1..30 grid).
     for row_idx in range(min(2, len(raw))):
         for cell in raw.iloc[row_idx].tolist():
             if pd.isna(cell):
@@ -1720,6 +1785,10 @@ def _infer_month_from_context(raw: pd.DataFrame, sheet_name: str = "") -> Option
             parsed = _parse_month_label(str(cell))
             if parsed is not None:
                 return parsed
+    for row_idx in range(min(2, len(raw))):
+        for cell in raw.iloc[row_idx].tolist():
+            if isinstance(cell, (dt.datetime, dt.date)) and not pd.isna(cell):
+                return (cell.year, cell.month)
     return None
 
 

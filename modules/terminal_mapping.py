@@ -437,6 +437,21 @@ _GOA_OUTLET_TO_TERMINAL: dict[str, Optional[str]] = {
 }
 
 
+# Bhogapuram (Vizag) — one terminal, traffic split Domestic / International
+# like Hyderabad. Outlets not listed (spa, new outlets) use the whole airport.
+_BHOGAPURAM_OUTLET_TO_TERMINAL: dict[str, Optional[str]] = {
+    "Domestic Lounge":                  "Domestic",
+    "Domestic Lounge T3":               "Domestic",      # canonical name in revenue data
+    "International Lounge":             "International",
+    "Reserved Lounge":                  "International",
+    "Atithya":                          "All",           # canonical of Meet & Greet
+    "Meet & Greet":                     "All",
+    "Porter":                           "All",
+    "Baggage Wrapping":                 "All",
+    "Enwrap":                           "All",
+}
+
+
 def get_terminal_for_outlet(outlet: str, location: str) -> Optional[str]:
     """
     Return the terminal label for a given outlet+location.
@@ -444,7 +459,8 @@ def get_terminal_for_outlet(outlet: str, location: str) -> Optional[str]:
     - Delhi outlet with an assigned terminal  → "T1" / "T2" / "T3"
     - Delhi outlet mapped to None             → None (airport-wide service;
       terminal-specific traffic does not apply)
-    - Hyderabad / Goa                         → "Main Terminal"
+    - Hyderabad / Goa / Bhogapuram            → "Domestic" / "International" /
+                                                "All" or "Main Terminal"
     - Outlet not yet in the mapping           → "Unmapped" (visible in the
       Terminal Analysis page so new outlets can be spotted and added)
     """
@@ -457,15 +473,17 @@ def get_terminal_for_outlet(outlet: str, location: str) -> Optional[str]:
         mapping = _HYDERABAD_OUTLET_TO_TERMINAL
     elif location_key == "Goa":
         mapping = _GOA_OUTLET_TO_TERMINAL
+    elif location_key == "Bhogapuram":
+        mapping = _BHOGAPURAM_OUTLET_TO_TERMINAL
     else:
         return DEFAULT_TERMINAL_FALLBACK
 
     if outlet_key in mapping:
         return mapping[outlet_key]
-    # Hyderabad/Goa outlets not in the per-outlet mapping fall back to
-    # whole-airport total rather than "Unmapped" — these are single-
+    # Hyderabad/Goa/Bhogapuram outlets not in the per-outlet mapping fall
+    # back to whole-airport total rather than "Unmapped" — these are single-
     # terminal airports so a fallback to total is always safe.
-    if location_key in ("Hyderabad", "Goa"):
+    if location_key in ("Hyderabad", "Goa", "Bhogapuram"):
         return MAIN_TERMINAL
     return DEFAULT_TERMINAL_FALLBACK
 
@@ -499,7 +517,7 @@ def get_known_terminals_for_location(location: str) -> list[str]:
             "T3 Int Dep", "T3 Int Arr",
             "T3",   # fallback for older data without Dep/Arr split
         ])
-    if location_key in ("Hyderabad", "Goa"):
+    if location_key in ("Hyderabad", "Goa", "Bhogapuram"):
         return ["Domestic", "International", MAIN_TERMINAL]
     return []
 

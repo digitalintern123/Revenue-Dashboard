@@ -354,7 +354,8 @@ with tab_traffic:
                         _sr = database.save_traffic_dataframe(_parsed, _tf.name)
                         pending_t.append({"success":True,"file_name":_tf.name,
                             "inserted":_sr["inserted"],"skipped":_sr["skipped"],
-                            "rows_parsed":len(_parsed),"parsed_df":_parsed})
+                            "rows_parsed":len(_parsed),"parsed_df":_parsed,
+                            "skipped_sheets":_parsed.attrs.get("skipped_sheets", [])})
                     except Exception as _exc2:
                         pending_t.append({"success":False,"file_name":_tf.name,
                             "message":str(_exc2),"stage":"saving"})
@@ -372,6 +373,8 @@ with tab_traffic:
                 upload_status.render_result(True, _tr["file_name"], "",
                     inserted=_tr["inserted"], skipped=_tr["skipped"],
                     extra_lines=[f"**Rows parsed:** {_tr['rows_parsed']:,}"])
+                for _msg in _tr.get("skipped_sheets") or []:
+                    st.warning(f"⚠️ {_msg}")
                 with st.expander(f"📋 Preview — {_tr['file_name']}", expanded=True):
                     st.dataframe(_tr["parsed_df"], use_container_width=True, hide_index=True)
             else:

@@ -2430,8 +2430,8 @@ def join_revenue_with_traffic_by_outlet(
 
         if terminal == "All":
             # M&G / Atithya: entire airport
-            # Delhi: all 8 terminal pools; HYD/GOA: Domestic + International
-            if location in ("Hyderabad", "Goa"):
+            # Delhi: all 8 terminal pools; HYD/GOA/Bhogapuram: Domestic + International
+            if location in ("Hyderabad", "Goa", "Bhogapuram"):
                 return _sum_pools(["Domestic", "International"])
             return _sum_pools(["T1 Dep", "T1 Arr", "T2 Dep", "T2 Arr",
                                 "T3 Dom Dep", "T3 Dom Arr", "T3 Int Dep", "T3 Int Arr"])

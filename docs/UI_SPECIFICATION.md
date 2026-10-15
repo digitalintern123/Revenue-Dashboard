@@ -56,6 +56,8 @@ Tabs (`key="upload_tabs"`): **Daily Revenue** · **Historical Import** ·
 - AOP tab: **Replace existing AOP for the months in this file** (on by
   default); after import, expanders for the Sky Plates / Encalm Eats outlet
   mapping (with *Result*) and rows not imported as EHPL AOP.
+- Traffic tab: after import, a warning per sheet that produced no rows
+  (`traffic_parser._skipped_sheets`).
 - Every successful write calls `clear_data_cache()` then `st.rerun()`.
 
 ## 3. Previous Uploads (`views/Previous_Uploads.py`)

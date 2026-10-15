@@ -306,3 +306,29 @@ def test_batched_save_adds_same_outlet_lines_across_batches(monkeypatch):
     assert saved["revenue"].sum() == 3600.0
     reserved = saved[(saved["date"].astype(str) == str(d2)) & (saved["outlet"] == "Reserved Lounge")]
     assert reserved["revenue"].iloc[0] == 2500.0 and reserved["pax"].iloc[0] == 25
+
+
+# ── Bhogapuram traffic (Domestic / International, like Hyderabad) ─────────────
+
+class TestBhogapuramTraffic:
+    def _setup(self):
+        days = [dt.date(2026, 9, 1), dt.date(2026, 9, 2)]
+        traffic = pd.DataFrame([
+            {"date": d, "period_end": pd.NaT, "granularity": "daily", "location": "Bhogapuram",
+             "terminal": term, "traffic": val}
+            for d in days for term, val in (("Domestic", 1000.0), ("International", 100.0))
+        ])
+        db.save_traffic_dataframe(traffic, "traffic.xlsx")
+        rev = pd.concat([_revenue_df(date=d, outlet=o, location="Bhogapuram", pax=10, revenue=1000)
+                         for d in days for o in ("Domestic Lounge T3", "International Lounge", "Atithya")])
+        return rev
+
+    def test_outlets_get_their_pool(self):
+        out = db.join_revenue_with_traffic_by_outlet(self._setup()).set_index("outlet")["traffic"]
+        assert out["Domestic Lounge T3"] == 2000
+        assert out["International Lounge"] == 200
+        assert out["Atithya"] == 2200          # whole airport = Domestic + International
+
+    def test_location_total_counts_each_terminal_once(self):
+        out = db.join_revenue_with_traffic(self._setup())
+        assert float(out.loc[out["location"] == "Bhogapuram", "traffic"].iloc[0]) == 2200

@@ -7,12 +7,6 @@ Open items only (checked against the code, Oct 2026). Fixed items are in
 
 ## Data and mapping
 
-### ISSUE-009 — Bhogapuram has no terminal mapping
-`terminal_mapping.get_terminal_for_outlet(..., "Bhogapuram")` returns
-"Unmapped", so Bhogapuram Traffic, PEN % and SPP show "—".
-**Fix:** add Bhogapuram terminals and an outlet → terminal map once its
-traffic file format is known.
-
 ### ISSUE-003 — Delhi domestic spa uses the international traffic pool
 *Domestic Spa - T3* (from "SPA Domestic") maps to **T3 Int Dep**; it should
 probably be T3 Dom Dep. Affects PEN %/SPP of that one row only.

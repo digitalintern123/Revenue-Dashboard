@@ -514,10 +514,14 @@ def _render_kpi_cards(
     cur_traf = None
     if show_traffic:
         try:
-            tdf = database.join_revenue_with_traffic_by_outlet(cur_df)
+            # Whole-airport traffic per location (its stored terminal rows,
+            # each counted once). Adding up the outlets' pools instead
+            # double-counts: the whole-airport pool (Atithya) already
+            # contains the Domestic / International / terminal pools.
+            tdf = database.join_revenue_with_traffic(cur_df)
             if tdf is not None and not tdf.empty and "traffic" in tdf.columns:
-                # Deduplicate traffic pools — sum unique values per location
-                cur_traf = float(tdf.drop_duplicates(subset=["traffic"])["traffic"].sum())
+                traf = pd.to_numeric(tdf["traffic"], errors="coerce")
+                cur_traf = float(traf.sum()) if traf.notna().any() else None
         except Exception:
             pass
 
