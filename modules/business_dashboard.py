@@ -193,6 +193,16 @@ def _build_location_report(
             r["cmp_rev"] = (r["cmp_rev"] or 0.0) + pr
             r["cmp_pax"] = (r["cmp_pax"] or 0.0) + pp
 
+    # The location's outlet list always shows, with "—" when a period has no figures
+    from modules.outlet_groups import ALWAYS_SHOW_ROWS
+    always_show = set()
+    for gk, name in ALWAYS_SHOW_ROWS.get(location, []):
+        rows_by_display.setdefault(name, {
+            "group": gk, "members": [],
+            "cur_rev": 0.0, "cur_pax": 0.0, "cmp_rev": None, "cmp_pax": None, "aop": 0.0,
+        })
+        always_show.add(name)
+
     # Attach AOP: each AOP line to the row holding that outlet, else its own row
     used_keys: set[str] = set()
     for display, r in rows_by_display.items():
@@ -243,7 +253,7 @@ def _build_location_report(
     for display, r in rows_by_display.items():
         cur_rev, cur_pax = r["cur_rev"], r["cur_pax"]
         cmp_rev, cmp_pax, aop = r["cmp_rev"], r["cmp_pax"], (r["aop"] or None)
-        if not (cur_rev or cur_pax or cmp_rev or cmp_pax or aop):
+        if not (cur_rev or cur_pax or cmp_rev or cmp_pax or aop) and display not in always_show:
             continue   # nothing to show in either period
         traf_c = _traffic(_traf_cur_lookup, r["members"], display)
         traf_p = _traffic(_traf_cmp_lookup, r["members"], display)

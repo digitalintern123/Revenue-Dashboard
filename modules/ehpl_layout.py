@@ -89,14 +89,17 @@ _SUBSIDIARY_GROUPS: frozenset[str] = frozenset({
 })
 
 HYD_SECTIONS = {
-    "LOUNGES": ["Domestic Lounge", "International Lounge", "Encalm Prive"],
+    "LOUNGES": ["Domestic Lounge", "International Lounge", "Encalm Prive",
+                "Reserved Lounge", "GAT"],
     "ATITHYA SERVICES": ["Atithya"],
     "ENWRAP": ["Baggage Wrapping"],
     "PORTER": ["Porter"],
+    "OTHERS": ["Airport Lodge", "Transit Hotel"],
 }
 
 GOA_SECTIONS = {
-    "LOUNGES":          ["Domestic Lounge", "International Lounge"],
+    "LOUNGES":          ["Domestic Lounge", "International Lounge",
+                         "Reserved Lounge", "CIP Lounge"],
     "ATITHYA SERVICES": ["Atithya"],
     "PORTER":           ["Porter"],
     "ENWRAP":           ["Baggage Wrapping"],
@@ -105,6 +108,7 @@ GOA_SECTIONS = {
 BHOGAPURAM_SECTIONS = {
     # Bhogapuram only has these EHPL outlets
     "LOUNGES":          ["Domestic Lounge", "International Lounge", "Reserved Lounge"],
+    "SPA":              ["Spa Domestic"],
     "ATITHYA SERVICES": ["Atithya"],
     "PORTER":           ["Porter"],
     "ENWRAP":           ["Baggage Wrapping"],
