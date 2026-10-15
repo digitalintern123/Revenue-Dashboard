@@ -30,6 +30,18 @@ def _init_db_once() -> bool:
     return True
 
 
+@st.cache_resource(show_spinner=False)
+def _daily_sqlite_backup(day: str) -> Optional[str]:
+    """Once per server per day: copy the SQLite database to <data dir>/backups
+    (last 7 kept). Does nothing on Postgres. `day` is only the cache key."""
+    try:
+        return database.backup_sqlite()
+    except Exception as exc:  # a failed backup must never break the page
+        import logging
+        logging.getLogger(__name__).warning("SQLite backup failed: %s", exc)
+        return None
+
+
 def bootstrap_session() -> None:
     """
     Ensure the database schema exists. Safe to call at the top of every
@@ -39,6 +51,7 @@ def bootstrap_session() -> None:
     if not st.session_state.get(_BOOTSTRAPPED_KEY):
         _init_db_once()
         st.session_state[_BOOTSTRAPPED_KEY] = True
+    _daily_sqlite_backup(dt.date.today().isoformat())
 
 
 def get_active_date() -> Optional[dt.date]:

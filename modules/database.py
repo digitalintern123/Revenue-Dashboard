@@ -30,6 +30,7 @@ from sqlalchemy import (
     UniqueConstraint,
     and_ as sql_and,
     create_engine,
+    event,
     func,
     or_ as sql_or,
     select,
@@ -92,10 +93,16 @@ def _database_url_candidates() -> list[tuple[str, str]]:
     return found
 
 
+def sqlite_data_dir() -> str:
+    """Folder for the SQLite file: $DATA_DIR (e.g. a Render persistent disk
+    mounted at /var/data), else the repo's data/ folder."""
+    return os.environ.get("DATA_DIR", "").strip() or os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "data")
+
+
 def _local_sqlite_url() -> str:
-    """Local SQLite fallback — try data/ dir first, then /tmp."""
-    _repo_root = os.path.dirname(os.path.dirname(__file__))
-    _local_db = os.path.join(_repo_root, "data", "revenue_analytics.db")
+    """SQLite in sqlite_data_dir() — falls back to /tmp if that isn't writable."""
+    _local_db = os.path.join(sqlite_data_dir(), "revenue_analytics.db")
     try:
         os.makedirs(os.path.dirname(_local_db), exist_ok=True)
         # Test writability
@@ -204,7 +211,55 @@ else:
         _DATABASE_URL,
         connect_args={"check_same_thread": False, "timeout": 30},
     )
+
+    @event.listens_for(ENGINE, "connect")
+    def _sqlite_pragmas(dbapi_conn, _record):
+        # WAL lets dashboards keep reading while an upload is writing;
+        # NORMAL sync is safe with WAL and much faster than FULL.
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA synchronous=NORMAL")
+        cur.execute("PRAGMA busy_timeout=30000")
+        cur.close()
+
 SessionLocal = sessionmaker(bind=ENGINE)
+
+
+def sqlite_db_path() -> Optional[str]:
+    """Filesystem path of the SQLite database, or None when using Postgres."""
+    if _IS_POSTGRES:
+        return None
+    return ENGINE.url.database
+
+
+def backup_sqlite(backup_dir: Optional[str] = None, keep: int = 7) -> Optional[str]:
+    """Copy the live SQLite database to <backup_dir>/revenue_analytics_YYYY-MM-DD.db
+    with SQLite's online backup API (safe while the app is running) and keep
+    the newest `keep` copies. No-op for Postgres. Returns the backup path."""
+    import glob
+    import sqlite3
+
+    src_path = sqlite_db_path()
+    if not src_path or not os.path.exists(src_path):
+        return None
+    backup_dir = backup_dir or os.path.join(os.path.dirname(src_path), "backups")
+    os.makedirs(backup_dir, exist_ok=True)
+    dest = os.path.join(backup_dir, f"revenue_analytics_{dt.date.today().isoformat()}.db")
+    src = sqlite3.connect(src_path)
+    try:
+        out = sqlite3.connect(dest)
+        try:
+            src.backup(out)
+        finally:
+            out.close()
+    finally:
+        src.close()
+    for old in sorted(glob.glob(os.path.join(backup_dir, "revenue_analytics_*.db")))[:-keep]:
+        try:
+            os.remove(old)
+        except OSError:
+            pass
+    return dest
 
 def _read_sql(query) -> pd.DataFrame:
     """

@@ -76,6 +76,19 @@ def check_production_readiness() -> None:
             "Set DATABASE_URL in Streamlit Secrets for persistence."
         )
 
+    # ── 2b. Render: SQLite must live on the persistent disk ────────────────
+    # A Render service's own filesystem is wiped on every deploy/restart, so
+    # SQLite there silently loses all uploads. Refuse to run instead.
+    if os.environ.get("RENDER") and not db_url:
+        data_dir = os.environ.get("DATA_DIR", "").strip()
+        if not data_dir or not os.path.isdir(data_dir):
+            errors.append(
+                "This app is using SQLite on Render without a persistent disk, so "
+                "uploaded data would be lost on the next deploy or restart. Add a Render "
+                "Disk (e.g. mounted at /var/data) and set DATA_DIR to that path, or set "
+                "DATABASE_URL to a Postgres database."
+            )
+
     # ── 3. GitHub backup warning (Streamlit Cloud only) ──────────────────────
     github_token = ""
     try:
