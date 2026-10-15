@@ -188,12 +188,15 @@ def _render_compare_controls(
         other_years = sorted(available_years or [anchor_date.year - 1], reverse=True)
         # Default to the year before the report year (comparing a year with
         # itself shows nothing useful); the current year stays selectable.
-        _prev = anchor_date.year - 1
+        _others = [y for y in other_years if y != anchor_date.year]
+        _default = (anchor_date.year - 1 if anchor_date.year - 1 in other_years
+                    else min(_others, key=lambda y: abs(y - anchor_date.year)) if _others
+                    else other_years[0])
         with year_col:
             compare_year = st.selectbox(
                 "Compare Year",
                 options=other_years,
-                index=other_years.index(_prev) if _prev in other_years else 0,
+                index=other_years.index(_default),
                 key=f"{key_prefix}_year_year",
             )
 
