@@ -7,6 +7,15 @@ names and file paths in them may no longer exist).
 
 ## Version 2.7.0 (October 2026) — every line item, Windows server operations
 
+### Terminal-wise Performance
+- Traffic, PEN % and SPP were blank for every location (traffic was looked up
+  with text dates and old terminal names, and the error was hidden). The
+  table now uses the same traffic as the outlet table, the compare period
+  uses its own traffic, and TOTAL / *Airport-wide services* / *No terminal
+  traffic* rows make it add up to TOTAL EHPL.
+- Traffic totals no longer add a monthly figure on top of daily figures for
+  the same days (SQLite text dates were compared with real dates).
+
 ### Comparisons
 - **Year-wise uses the financial year** (1 April – 31 March). *To-Date*
   compares 1 April to the report date with the same span of the chosen FY;

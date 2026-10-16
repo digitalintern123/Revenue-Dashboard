@@ -364,3 +364,58 @@ class TestTrafficReplace:
         assert stored[("Hyderabad", 1, "International")] == 30.0
         assert stored[("Hyderabad", 2, "Domestic")] == 999.0           # date not in the file
         assert stored[("Goa", 1, "Domestic")] == 50.0                   # airport not in the file
+
+
+class TestTerminalWisePerformance:
+    """EHPL 'Terminal-wise Performance' table: each terminal row gets its own
+    traffic pool for each period, and the rows add up to the location total."""
+
+    POOLS = ["T1 Dep", "T1 Arr", "T2 Dep", "T2 Arr",
+             "T3 Dom Dep", "T3 Dom Arr", "T3 Int Dep", "T3 Int Arr"]
+
+    def _setup(self, day, scale):
+        traffic = pd.DataFrame([
+            {"date": day, "period_end": pd.NaT, "granularity": "daily", "location": "Delhi",
+             "terminal": t, "traffic": (i + 1) * 1000.0 * scale}
+            for i, t in enumerate(self.POOLS)])
+        db.save_traffic_dataframe(traffic, "t.xlsx")
+        rev = pd.concat([
+            _revenue_df(day, "Domestic Lounge - T1 L4&5", revenue=100_000.0 * scale, pax=100),
+            _revenue_df(day, "Arrival Lounge - LA22", revenue=50_000.0, pax=40),
+            _revenue_df(day, "Atithya", revenue=20_000.0, pax=10),
+            _revenue_df(day, "Business Centre", revenue=5_000.0, pax=5),
+        ])
+        db.save_dataframe(rev, source_file="r.xlsx")
+        return db.load_for_date_range(day, day)
+
+    def test_rows_traffic_and_totals(self):
+        from modules import ehpl_layout as el
+        cur = self._setup(dt.date(2026, 3, 10), 2)
+        cmp = self._setup(dt.date(2026, 3, 9), 1)
+        rows = {r["Performance"]: r for r in el._get_terminal_rows("Delhi", cur, cmp)}
+
+        assert rows["T1"]["cur_traffic"] == 2000.0            # T1 Dep only
+        assert rows["T1"]["cmp_traffic"] == 1000.0            # compare day's own traffic
+        assert rows["T1"]["pen_cur"] == pytest.approx(100 / 2000 * 100)
+        assert rows["T1"]["spp_cmp"] == pytest.approx(100_000 / 1000)
+        assert rows["T3 Arrivals"]["cur_traffic"] == (6000.0 + 8000.0) * 2   # dom + int arrivals
+        assert rows["Airport-wide services"]["cur_traffic"] == 36_000.0 * 2  # whole airport
+        assert rows["No terminal traffic"]["cur_rev"] == 5_000.0
+        assert rows["No terminal traffic"]["cur_traffic"] is None
+        total = rows["TOTAL"]
+        assert total["cur_rev"] == 200_000.0 + 50_000 + 20_000 + 5_000
+        assert total["cur_rev"] == sum(r["cur_rev"] for k, r in rows.items() if k != "TOTAL")
+        assert total["cur_traffic"] == 72_000.0 and total["cmp_traffic"] == 36_000.0
+
+
+def test_traffic_total_daily_rows_are_not_doubled_by_monthly():
+    """Days covered by daily rows must not also get a share of a monthly row."""
+    db.save_traffic_dataframe(pd.DataFrame([
+        {"date": dt.date(2026, 2, d), "period_end": pd.NaT, "granularity": "daily",
+         "location": "Goa", "terminal": "Domestic", "traffic": 100.0} for d in range(1, 29)
+    ] + [{"date": dt.date(2026, 2, 1), "period_end": dt.date(2026, 2, 28), "granularity": "monthly",
+          "location": "Goa", "terminal": "Domestic", "traffic": 9_999.0}]), "g.xlsx")
+    t = db.get_traffic_total_for_range(dt.date(2026, 2, 1), dt.date(2026, 2, 28), "Goa")
+    row = t[t["terminal"] == "Domestic"].iloc[0]
+    assert row["traffic"] == 2_800.0
+    assert row["missing_days"] == 0 and not row["is_estimated"]

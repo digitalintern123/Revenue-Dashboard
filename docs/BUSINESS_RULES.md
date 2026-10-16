@@ -93,6 +93,13 @@ added once (`database.join_revenue_with_traffic`) — Delhi's 8 pools,
 Domestic + International elsewhere. Adding outlet pools would double-count,
 because the whole-airport pool already contains the others.
 
+**Terminal-wise Performance** (`ehpl_layout._get_terminal_rows`): outlets are
+grouped by their traffic pool's terminal; a terminal's traffic = the sum of
+the distinct pools its outlets use (T3 Arrivals = T3 Dom Arr + T3 Int Arr);
+*Airport-wide services* (Atithya, Porter, Enwrap, Buggy) use the largest of
+their pools (the whole airport); *No terminal traffic* rows have no PEN/SPP;
+TOTAL traffic = the location total above. Each period uses its own traffic.
+
 **Subtotals** (`business_dashboard._subtotal_traffic`): one shared pool →
 that value; a group containing Atithya (whole airport) → the maximum;
 one pool ≥ 80 % of the sum → the maximum; otherwise the sum.

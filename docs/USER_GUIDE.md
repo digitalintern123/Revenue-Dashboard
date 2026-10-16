@@ -91,7 +91,7 @@ charts, and the tables.
 
 ### EHPL
 
-One table per location, then a **Terminal-wise Performance** table.
+One table per location, then a **Terminal-wise Performance** table (below).
 Every outlet in the data is shown once and the location TOTAL always equals
 the uploaded figures. These outlets **always have a row** (shown with "—" in
 periods without sales):
@@ -113,6 +113,15 @@ T3 International, Arrivals, Reserved), Spa, Nap & Shower, Atithya, Enwrap,
 Bar and Others.
 An outlet the layout does not know yet appears under **TOTAL OTHERS**
 rather than disappearing.
+
+
+**Terminal-wise Performance:** TOTAL, then one row per terminal (Delhi: T1, T2,
+T3 Domestic, T3 International, T3 Arrivals; Hyderabad / Goa / Bhogapuram:
+Domestic, International), plus *Airport-wide services* (Atithya, Porter,
+Enwrap, Buggy — measured against whole-airport traffic) and *No terminal
+traffic* (Business Centre, RDC, CIP Lounge …). The rows add up to the
+location's TOTAL EHPL. Traffic, PEN % and SPP show "—" for a period with no
+traffic uploaded.
 
 ### Encalm Eats
 

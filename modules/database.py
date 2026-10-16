@@ -2115,7 +2115,9 @@ def get_traffic_total_for_range(
         daily_rows = group[group["granularity"] == "daily"]
         monthly_rows = group[group["granularity"] == "monthly"]
 
-        daily_dates_covered = set(daily_rows["date"])
+        # SQLite returns ISO strings; compare real dates, or every day would
+        # look uncovered and a monthly row would be added on top of the daily ones
+        daily_dates_covered = {_to_date(d) for d in daily_rows["date"]}
         all_dates_in_range = {start_date + dt.timedelta(days=i) for i in range(total_days)}
         missing_dates = all_dates_in_range - daily_dates_covered
 
