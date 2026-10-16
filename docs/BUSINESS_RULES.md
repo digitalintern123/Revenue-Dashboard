@@ -36,7 +36,11 @@ never hard-code 0.05 elsewhere.
 | Day-wise | the report date | the chosen compare date (default: the previous date with data) |
 | Week-wise | Mon–Sun of the report week (*Full Period*) or Mon–report date (*To-Date*) | the chosen earlier week, same span |
 | Month-wise | the report month (full or to-date) | the chosen month, same span |
-| Year-wise | the report year (full or to-date) | the chosen year — **default: the previous year**, else the nearest other year with data (`comparison_widget`) |
+| Year-wise | the report's **financial year** (1 Apr – 31 Mar): full FY, or *To-Date* = 1 Apr to the report date | the chosen FY over the same span (To-Date: 1 Apr to the same day and month) — **default: the previous FY**, else the nearest other FY with data (`comparison_widget`) |
+
+Financial years are named by their start year — FY 2026-27 = 1 Apr 2026 to 31 Mar 2027
+(`revenue_analysis.fy_start_year`, `fy_bounds`, `fy_label`). Example: report
+date 15 Oct 2026, *To-Date* → 1 Apr–15 Oct 2026 vs 1 Apr–15 Oct 2025.
 
 If both periods would get the same label, the comparison columns are
 labelled "… (compare)" so the table still renders.

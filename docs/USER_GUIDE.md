@@ -71,8 +71,9 @@ All three dashboards (EHPL, Encalm Eats, Sky Plates) share the same filter bar:
 
 - **Report Date** (year / month / day) — the anchor date.
 - **Compare by** — **Day-wise**, **Week-wise**, **Month-wise** or **Year-wise**,
-  with **Full Period** or **To-Date**. Year-wise compares with the previous
-  year by default.
+  with **Full Period** or **To-Date**. Year-wise works on **financial years**
+  (1 April – 31 March) and compares with the previous FY by default; *To-Date*
+  means 1 April to the report date, e.g. 1 Apr–15 Oct 2026 vs 1 Apr–15 Oct 2025.
 - **Location** — one location or **All Locations** (one table per location).
 - The line under the filters says exactly what is shown, e.g.
   *Showing Aug 2026 (full month) vs Jul 2026 (full month) · All Locations*.

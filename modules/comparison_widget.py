@@ -183,20 +183,23 @@ def _render_compare_controls(
                 horizontal=compact,
                 key=f"{key_prefix}_year_mode",
             )
-        available_years = cached_db.get_available_years()
-        # All years available — including the current year
-        other_years = sorted(available_years or [anchor_date.year - 1], reverse=True)
-        # Default to the year before the report year (comparing a year with
-        # itself shows nothing useful); the current year stays selectable.
-        _others = [y for y in other_years if y != anchor_date.year]
-        _default = (anchor_date.year - 1 if anchor_date.year - 1 in other_years
-                    else min(_others, key=lambda y: abs(y - anchor_date.year)) if _others
+        # Financial years (April–March) that have data, named by start year
+        cur_fy = ra.fy_start_year(anchor_date)
+        available_fys = {y if m >= 4 else y - 1
+                         for y, m in (cached_db.get_available_year_months() or [])}
+        other_years = sorted(available_fys or {cur_fy - 1}, reverse=True)
+        # Default to the FY before the report's FY (comparing a year with
+        # itself shows nothing useful); the current FY stays selectable.
+        _others = [y for y in other_years if y != cur_fy]
+        _default = (cur_fy - 1 if cur_fy - 1 in other_years
+                    else min(_others, key=lambda y: abs(y - cur_fy)) if _others
                     else other_years[0])
         with year_col:
             compare_year = st.selectbox(
-                "Compare Year",
+                "Compare Financial Year",
                 options=other_years,
                 index=other_years.index(_default),
+                format_func=ra.fy_label,
                 key=f"{key_prefix}_year_year",
             )
 

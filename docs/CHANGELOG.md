@@ -7,6 +7,11 @@ names and file paths in them may no longer exist).
 
 ## Version 2.7.0 (October 2026) — every line item, Windows server operations
 
+### Comparisons
+- **Year-wise uses the financial year** (1 April – 31 March). *To-Date*
+  compares 1 April to the report date with the same span of the chosen FY;
+  the year dropdown lists financial years (FY 2025-26 …).
+
 ### Imports
 - **Historical Import tab removed** from Upload Data. Full revenue workbooks
   are uploaded in the *Daily Revenue* tab (same parser, batched saving above

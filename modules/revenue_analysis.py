@@ -831,6 +831,30 @@ def year_bounds(year: int) -> tuple[dt.date, dt.date]:
     return dt.date(year, 1, 1), dt.date(year, 12, 31)
 
 
+def fy_start_year(d: dt.date) -> int:
+    """Financial year (April–March) containing `d`, named by its start year:
+    15 Oct 2026 → 2026 (FY 2026-27), 15 Feb 2026 → 2025 (FY 2025-26)."""
+    return d.year if d.month >= 4 else d.year - 1
+
+
+def fy_bounds(fy: int) -> tuple[dt.date, dt.date]:
+    """1 April of `fy` to 31 March of the next year."""
+    return dt.date(fy, 4, 1), dt.date(fy + 1, 3, 31)
+
+
+def fy_label(fy: int) -> str:
+    """'FY 2026-27' for fy=2026."""
+    return f"FY {fy}-{(fy + 1) % 100:02d}"
+
+
+def _shift_years(d: dt.date, years: int) -> dt.date:
+    """Same day and month `years` later (29 Feb → 28 Feb in a non-leap year)."""
+    try:
+        return d.replace(year=d.year + years)
+    except ValueError:
+        return d.replace(year=d.year + years, day=28)
+
+
 def resolve_comparison_ranges(
     comparison_type: str,
     anchor_date: dt.date,
@@ -958,30 +982,33 @@ def resolve_comparison_ranges(
         }
 
     if comparison_type == "Year-wise":
+        # Years are financial years (1 April – 31 March); compare_year is the
+        # FY's start year (2025 = FY 2025-26).
+        cur_fy = fy_start_year(anchor_date)
         if compare_year is None:
-            compare_year = anchor_date.year - 1
+            compare_year = cur_fy - 1
 
-        cur_first, cur_last = year_bounds(anchor_date.year)
-        cmp_first, cmp_last = year_bounds(compare_year)
+        cur_first, cur_last = fy_bounds(cur_fy)
+        cmp_first, cmp_last = fy_bounds(compare_year)
 
         if mode == "To-Date":
+            # 1 April up to the report date's day and month in both FYs
             cur_end = min(anchor_date, cur_last)
-            day_offset = (cur_end - cur_first).days
-            cmp_end = min(cmp_first + dt.timedelta(days=day_offset), cmp_last)
+            cmp_end = min(_shift_years(cur_end, compare_year - cur_fy), cmp_last)
             return {
-                "current_label": f"{anchor_date.year} (Jan 1–{cur_end:%b %d})",
+                "current_label": f"{fy_label(cur_fy)} (1 Apr–{cur_end:%d %b})",
                 "current_start": cur_first,
                 "current_end": cur_end,
-                "compare_label": f"{compare_year} (Jan 1–{cmp_end:%b %d})",
+                "compare_label": f"{fy_label(compare_year)} (1 Apr–{cmp_end:%d %b})",
                 "compare_start": cmp_first,
                 "compare_end": cmp_end,
             }
 
         return {
-            "current_label": f"{anchor_date.year} (full year)",
+            "current_label": f"{fy_label(cur_fy)} (full year)",
             "current_start": cur_first,
             "current_end": cur_last,
-            "compare_label": f"{compare_year} (full year)",
+            "compare_label": f"{fy_label(compare_year)} (full year)",
             "compare_start": cmp_first,
             "compare_end": cmp_last,
         }
@@ -1008,7 +1035,7 @@ def short_period_label(start_date: dt.date, end_date: dt.date, comparison_type: 
     if comparison_type == "Month-wise":
         return f"{start_date:%b %Y}"
     if comparison_type == "Year-wise":
-        return f"{start_date.year}"
+        return fy_label(fy_start_year(start_date))
     if start_date == end_date:
         return f"{start_date:%d %b %Y}"
     return f"{start_date:%d %b %Y} – {end_date:%d %b %Y}"
