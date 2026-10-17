@@ -35,6 +35,7 @@ logged in.
 from __future__ import annotations
 
 import hashlib
+import os
 import hmac
 import secrets as _secrets_module
 from typing import Optional
@@ -49,10 +50,12 @@ _FAILED_ATTEMPTS_KEY = "_failed_login_attempts"
 _LOCKOUT_UNTIL_KEY = "_lockout_until"
 _SESSION_CREATED_KEY = "_session_created_at"
 _LAST_ACTIVITY_KEY = "_last_activity_at"
+_LAST_SESSION_CHECK_KEY = "_last_session_check_at"
 _MAX_ATTEMPTS = 5           # lock after 5 wrong passwords
 _LOCKOUT_SECONDS = 300      # 5 minute lockout
 _SESSION_TIMEOUT_HOURS = 8  # absolute auto-logout after 8 hours, active or not
 _INACTIVITY_TIMEOUT_MINUTES = 30  # auto-logout after 30 minutes with no activity
+_SESSION_CHECK_INTERVAL_SECONDS = 60  # how often to re-validate the token in the DB
 
 
 def _hash_password(password: str, salt: str) -> str:
@@ -165,8 +168,25 @@ def logout() -> None:
             pass  # DB unavailable — still clear local state
     for key in [_SESSION_KEY, _SESSION_TOKEN_KEY, _LOGIN_ATTEMPTED_KEY,
                 _SESSION_CREATED_KEY, _FAILED_ATTEMPTS_KEY, _LOCKOUT_UNTIL_KEY,
-                _LAST_ACTIVITY_KEY]:
+                _LAST_ACTIVITY_KEY, _LAST_SESSION_CHECK_KEY]:
         st.session_state.pop(key, None)
+
+
+def _login_brand() -> None:
+    """Logo + heading shown above the sign-in form."""
+    import base64
+    from .ui import LOGO_STACKED
+    img = ""
+    try:
+        with open(LOGO_STACKED, "rb") as f:
+            img = f'<img src="data:image/png;base64,{base64.b64encode(f.read()).decode()}" alt="Encalm">'
+    except OSError:
+        pass
+    st.markdown(
+        f'<div class="enc-login">{img}<h2>Sign in</h2>'
+        "<p>Encalm Group — Revenue Analytics System</p></div>",
+        unsafe_allow_html=True,
+    )
 
 
 def require_login() -> None:
@@ -202,8 +222,15 @@ def require_login() -> None:
         # Check that the session token is still registered in the DB.
         # If another tab logged out (or an admin forced logout), this will
         # catch it and terminate this session too.
+        # Checking the DB costs two round trips, so do it at most once per
+        # _SESSION_CHECK_INTERVAL_SECONDS rather than on every click. A logout
+        # from another tab therefore takes effect here within that interval.
         token = st.session_state.get(_SESSION_TOKEN_KEY)
+        last_check = st.session_state.get(_LAST_SESSION_CHECK_KEY)
+        if token and last_check and (now - last_check).total_seconds() < _SESSION_CHECK_INTERVAL_SECONDS:
+            token = None
         if token:
+            st.session_state[_LAST_SESSION_CHECK_KEY] = now
             try:
                 from . import database as _db
                 if not _db.is_session_valid(token):
@@ -228,87 +255,88 @@ def require_login() -> None:
 
     users = _get_configured_users()
 
-    st.title("🔒 Sign in")
-    st.caption("Encalm Group — Revenue Analytics System")
+    _, center, _ = st.columns([1, 1.3, 1])
+    with center:
+        _login_brand()
 
-    if not users:
-        st.error(
-            "No users are configured yet. An administrator needs to add "
-            "credentials under `[auth.users]` in this app's Secrets "
-            "(Streamlit Cloud → App settings → Secrets, or "
-            "`.streamlit/secrets.toml` when running locally) before anyone "
-            "can sign in. See `modules/generate_password_hash.py` for how "
-            "to generate a password entry safely (hashed, never plaintext)."
-        )
-        st.stop()
-
-    with st.form("login_form"):
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Sign in", type="primary")
-
-    if submitted:
-        import datetime as _dt
-        st.session_state[_LOGIN_ATTEMPTED_KEY] = True
-
-        # Check DB-backed lockout (persists across tabs)
-        _stripped_user = username.strip()
-        try:
-            from . import database as _db
-            _locked, _remaining = _db.get_lockout_status(_stripped_user)
-        except Exception:
-            _locked, _remaining = False, 0
-        # Also check session-state lockout (fallback when DB unavailable)
-        _ss_lockout = st.session_state.get(_LOCKOUT_UNTIL_KEY)
-        if _locked or (_ss_lockout and _dt.datetime.now(tz=_dt.timezone.utc) < _ss_lockout):
-            _secs = _remaining or int((_ss_lockout - _dt.datetime.now(tz=_dt.timezone.utc)).total_seconds()) if _ss_lockout else _remaining
-            st.error(f"Too many failed attempts. Try again in {_secs} seconds.")
+        if not users:
+            st.error(
+                "No users are configured yet. An administrator needs to add "
+                "credentials under `[auth.users]` in this app's Secrets "
+                "(Streamlit Cloud → App settings → Secrets, or "
+                "`.streamlit/secrets.toml` when running locally) before anyone "
+                "can sign in. See `modules/generate_password_hash.py` for how "
+                "to generate a password entry safely (hashed, never plaintext)."
+            )
             st.stop()
 
-        stored = users.get(_stripped_user)
-        if _verify_password_constant_time(password, stored):
-            # Reset failed attempts on success
-            st.session_state.pop(_FAILED_ATTEMPTS_KEY, None)
-            st.session_state.pop(_LOCKOUT_UNTIL_KEY, None)
-            try:
-                from . import database as _db
-                _db.clear_failed_logins(_stripped_user)
-            except Exception:
-                pass
-            import datetime as _dt
-            import secrets as _sec
-            _token = _sec.token_hex(32)
-            st.session_state[_SESSION_KEY] = username.strip()
-            st.session_state[_SESSION_TOKEN_KEY] = _token
-            st.session_state[_SESSION_CREATED_KEY] = _dt.datetime.now(tz=_dt.timezone.utc)
-            # Register in DB for server-side cross-tab invalidation
-            try:
-                from . import database as _db
-                _db.register_session(username.strip(), _token)
-            except Exception:
-                pass  # DB unavailable — local session still works
-            st.rerun()
-        else:
-            # Track failed attempts in DB (cross-tab persistent)
-            try:
-                from . import database as _db
-                _db.record_failed_login(_stripped_user)
-                _locked2, _remaining2 = _db.get_lockout_status(_stripped_user)
-            except Exception:
-                _locked2, _remaining2 = False, 0
-            # Also track in session-state as fallback
-            attempts = st.session_state.get(_FAILED_ATTEMPTS_KEY, 0) + 1
-            st.session_state[_FAILED_ATTEMPTS_KEY] = attempts
-            if _locked2 or attempts >= _MAX_ATTEMPTS:
-                st.session_state[_LOCKOUT_UNTIL_KEY] = (
-                    _dt.datetime.now(tz=_dt.timezone.utc) + _dt.timedelta(seconds=_LOCKOUT_SECONDS)
-                )
-                st.error(f"Too many failed attempts. Account locked for {_LOCKOUT_SECONDS // 60} minutes.")
-            else:
-                remaining = _MAX_ATTEMPTS - attempts
-                st.error(f"Incorrect username or password. {remaining} attempt(s) remaining.")
+        with st.form("login_form"):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
 
-    st.stop()
+        if submitted:
+            import datetime as _dt
+            st.session_state[_LOGIN_ATTEMPTED_KEY] = True
+
+            # Check DB-backed lockout (persists across tabs)
+            _stripped_user = username.strip()
+            try:
+                from . import database as _db
+                _locked, _remaining = _db.get_lockout_status(_stripped_user)
+            except Exception:
+                _locked, _remaining = False, 0
+            # Also check session-state lockout (fallback when DB unavailable)
+            _ss_lockout = st.session_state.get(_LOCKOUT_UNTIL_KEY)
+            if _locked or (_ss_lockout and _dt.datetime.now(tz=_dt.timezone.utc) < _ss_lockout):
+                _secs = _remaining or int((_ss_lockout - _dt.datetime.now(tz=_dt.timezone.utc)).total_seconds()) if _ss_lockout else _remaining
+                st.error(f"Too many failed attempts. Try again in {_secs} seconds.")
+                st.stop()
+
+            stored = users.get(_stripped_user)
+            if _verify_password_constant_time(password, stored):
+                # Reset failed attempts on success
+                st.session_state.pop(_FAILED_ATTEMPTS_KEY, None)
+                st.session_state.pop(_LOCKOUT_UNTIL_KEY, None)
+                try:
+                    from . import database as _db
+                    _db.clear_failed_logins(_stripped_user)
+                except Exception:
+                    pass
+                import datetime as _dt
+                import secrets as _sec
+                _token = _sec.token_hex(32)
+                st.session_state[_SESSION_KEY] = username.strip()
+                st.session_state[_SESSION_TOKEN_KEY] = _token
+                st.session_state[_SESSION_CREATED_KEY] = _dt.datetime.now(tz=_dt.timezone.utc)
+                # Register in DB for server-side cross-tab invalidation
+                try:
+                    from . import database as _db
+                    _db.register_session(username.strip(), _token)
+                except Exception:
+                    pass  # DB unavailable — local session still works
+                st.rerun()
+            else:
+                # Track failed attempts in DB (cross-tab persistent)
+                try:
+                    from . import database as _db
+                    _db.record_failed_login(_stripped_user)
+                    _locked2, _remaining2 = _db.get_lockout_status(_stripped_user)
+                except Exception:
+                    _locked2, _remaining2 = False, 0
+                # Also track in session-state as fallback
+                attempts = st.session_state.get(_FAILED_ATTEMPTS_KEY, 0) + 1
+                st.session_state[_FAILED_ATTEMPTS_KEY] = attempts
+                if _locked2 or attempts >= _MAX_ATTEMPTS:
+                    st.session_state[_LOCKOUT_UNTIL_KEY] = (
+                        _dt.datetime.now(tz=_dt.timezone.utc) + _dt.timedelta(seconds=_LOCKOUT_SECONDS)
+                    )
+                    st.error(f"Too many failed attempts. Account locked for {_LOCKOUT_SECONDS // 60} minutes.")
+                else:
+                    remaining = _MAX_ATTEMPTS - attempts
+                    st.error(f"Incorrect username or password. {remaining} attempt(s) remaining.")
+
+        st.stop()
 
 
 def render_user_badge() -> None:
@@ -321,7 +349,14 @@ def render_user_badge() -> None:
     if not user:
         return
     with st.sidebar:
-        st.caption(f"👤 Signed in as **{user}**")
+        st.divider()
+        from .ui import icon_html
+        import html as _html
+        st.markdown(
+            f'<div class="enc-user">{icon_html("circle-user")} Signed in as '
+            f"<b>{_html.escape(user)}</b></div>",
+            unsafe_allow_html=True,
+        )
         if st.button("Log out", key="_logout_button", use_container_width=True):
             logout()
             st.rerun()

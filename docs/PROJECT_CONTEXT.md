@@ -1,241 +1,128 @@
-# PROJECT_CONTEXT.md
-# Encalm Revenue Analytics — Project Context
+# Project Context — Encalm Revenue Analytics
 
-> **Purpose of this file:** Single source of truth for any AI assistant or new developer
-> working on this project. Read this before touching any code.
+> Start here as a developer (or AI assistant). Read [AI_RULES.md](AI_RULES.md)
+> before changing code.
 
 ---
 
-## 1. What This Project Is
+## 1. What this is
 
-A **Streamlit multi-page web application** for Encalm Group's airport business revenue analytics.
+A Streamlit web app for Encalm Group's airport businesses.
 
 - **Entry point:** `streamlit run Home.py`
-- **Stack:** Python 3.11+ · Streamlit ≥1.36 · SQLAlchemy 2.x · SQLite (local) / PostgreSQL (prod) · Pandas · Plotly
-- **Tests:** 158 unit + integration tests (`python -m pytest tests/ -v`)
+- **Stack:** Python 3.11+ (server runs 3.14), Streamlit ≥ 1.40 (server runs
+  1.60), pandas, SQLAlchemy 2, Plotly, openpyxl / pdfplumber
+- **Database:** SQLite by default (`data/revenue_analytics.db`), PostgreSQL
+  when `DATABASE_URL` is set
+- **Tests:** 308 (`python -m pytest tests -q`)
+- **Live:** Windows VPS behind IIS — see [SERVER_RUNBOOK.md](SERVER_RUNBOOK.md)
 
----
+## 2. Business context
 
-## 2. Business Context
-
-Encalm Group operates airport hospitality services across **three Indian airports**:
-
-| Location | Code | Terminals |
-|----------|------|-----------|
-| Delhi (IGI) | Delhi | T1, T2, T3 (Dom + Int + Arr) |
-| Hyderabad (RGIA) | Hyderabad | Single terminal (Dom + Int) |
-| Goa (GOA) | Goa | Single terminal (Dom + Int) |
-
-### Three Business Segments
-
-```
-EHPL (Encalm Hospitality Private Ltd)     ← 95%+ of revenue
-  ├── Lounges      (T1D, T2, T3 Dom, T3 Int, Arrivals)
-  ├── Atithya      (Meet & Greet, Porter, Buggy, Enwrap)
-  └── Others       (Business Centre, RDC, Bars)
-
-Sky Plates                                 ← In-flight catering
-Encalm Eats                               ← F&B subsidiary
-```
-
----
-
-## 3. Application Architecture
-
-```
-Browser (HTTPS)
-     │
-     ▼
-Streamlit Server  (Home.py + pages/1–8)
-     │
-     ├── modules/auth.py          ← Login gate (FIRST on every page)
-     ├── modules/database.py      ← ONLY module that touches SQLAlchemy
-     ├── modules/revenue_analysis.py  ← Pure KPI functions (no DB)
-     ├── modules/outlet_groups.py ← MIS table structure config
-     ├── modules/terminal_mapping.py  ← Outlet→traffic pool mapping
-     └── modules/formatting.py    ← Indian number formatting
-     │
-     ▼
-Database  (SQLite locally at data/revenue_analytics.db)
-          (PostgreSQL in production via DATABASE_URL secret)
-```
-
----
-
-## 4. File Structure
-
-```
-project_root/
-├── Home.py                          # Entry: upload, DB management
-├── requirements.txt
-├── packages.txt                     # libpq-dev (for psycopg2 on Linux)
-├── pytest.ini
-├── conftest.py
-├── startup_checks.py                # Production readiness validation
-├── create_secrets.py                # CLI: generate secrets.toml
-│
-├── .streamlit/
-│   ├── config.toml                  # maxUploadSize=200, CORS=false
-│   ├── secrets.toml                 # NEVER committed. Contains passwords + DATABASE_URL
-│   └── secrets.toml.example         # Template
-│
-├── pages/                           # Auto-discovered by Streamlit
-│   ├── 1_Previous_Uploads.py        # Upload history + date browser
-│   ├── 2_Executive_Summary.py       # KPI cards, charts, AOP
-│   ├── 3_Revenue_Comparison.py      # 5-tab comparison + Dom/Int split
-│   ├── 4_Traffic_and_Terminal.py    # Traffic, Penetration, SPP
-│   ├── 5_Outlet_Performance.py      # Top/Bottom outlets, Rev/PAX
-│   ├── 6_Business_Insights.py       # Management narrative + drivers
-│   ├── 7_Service_Categories.py      # Per-category analysis
-│   └── 8_Business_Performance.py   # Hierarchical MIS (Excel mirror)
-│
-├── modules/
-│   ├── auth.py                      # PBKDF2 login, lockout, sessions
-│   ├── app_logger.py                # RotatingFileHandler, safe_run()
-│   ├── cached_db.py                 # @st.cache_data(ttl=60) wrappers
-│   ├── comparison_widget.py         # Shared comparison selector UI
-│   ├── data_processor.py            # Upload orchestration
-│   ├── database.py                  # ALL DB interaction (2,732 lines)
-│   ├── date_picker.py               # Year/Month/Day dropdown widget
-│   ├── date_utils.py                # safe_month_shift()
-│   ├── excel_parser.py              # Excel revenue parser
-│   ├── formatting.py                # Indian number format (₹49,35,256)
-│   ├── generate_password_hash.py    # CLI: hash passwords
-│   ├── insights.py                  # Rule-based management narrative
-│   ├── outlet_groups.py             # MIS row definitions + display names
-│   ├── pdf_parser.py                # PDF revenue parser
-│   ├── revenue_analysis.py          # All KPI calculations (970 lines)
-│   ├── segment_tree_view.py         # Segment tree chart
-│   ├── session.py                   # st.session_state helpers
-│   ├── table_style.py               # Pandas Styler helpers
-│   ├── terminal_mapping.py          # Outlet→terminal pool mapping
-│   ├── traffic_parser.py            # Airport traffic file parser
-│   ├── universal_parser.py          # Auto-detect parser
-│   └── upload_status.py             # Upload progress display
-│
-│   └── ingestion/                   # 10-stage universal ingestion pipeline
-│       ├── parser_factory.py        # Orchestrator
-│       ├── file_detector.py
-│       ├── table_detector.py
-│       ├── schema_detector.py
-│       ├── column_mapper.py
-│       ├── data_cleaner.py
-│       ├── normalizer.py
-│       ├── validator.py
-│       ├── confidence_engine.py
-│       └── ocr_engine.py
-│
-├── docs/                            # ← You are here
-│   ├── PROJECT_CONTEXT.md
-│   ├── BUSINESS_RULES.md
-│   ├── DATABASE_SCHEMA.md
-│   ├── DATA_MAPPINGS.md
-│   ├── MODULE_DEPENDENCIES.md
-│   ├── UI_SPECIFICATION.md
-│   ├── AI_RULES.md
-│   ├── CHANGELOG.md
-│   ├── KNOWN_ISSUES.md
-│   └── CODING_STANDARDS.md
-│
-└── tests/
-    ├── unit/
-    │   ├── test_revenue_analysis.py  # 142 unit tests
-    │   └── test_data_processor.py   # 16 unit tests
-    └── integration/
-        └── test_database.py
-```
-
----
-
-## 5. The Golden Rules (Never Break These)
-
-1. **`require_login()` is ALWAYS the first call on every page.** Before `st.title()`, before anything.
-2. **Only `database.py` imports SQLAlchemy.** No other module touches the ORM.
-3. **`revenue_analysis.py` is pure — no DB calls.** All functions take DataFrames and return DataFrames/dicts.
-4. **All money uses `format_money()`, all PAX uses `format_pax()`.** Never raw Python comma formatting.
-5. **Percentage values are fractions internally.** `pct_change()` returns `0.08` for +8%. `format_pct()` converts to display.
-6. **Outlet names are canonicalized at save time.** `canonicalize_outlet_name()` is called in `save_dataframe()`. Pages always see canonical names from the DB.
-7. **`st.session_state` holds only lightweight references.** Never store DataFrames in session state.
-8. **`safe_run()` wraps every error-prone section.** Never let one section crash the whole page.
-9. **Indian number formatting throughout.** 4935256 → `₹49,35,256` (not `₹4,935,256`).
-10. **`get_display_name(outlet, location)` for MIS display names.** Never hardcode display names in page 8.
-
----
-
-## 6. Page Load Order (Every Page)
-
-```python
-st.set_page_config(...)     # 1. MUST be first Streamlit call
-require_login()              # 2. Auth gate — st.stop() if not authenticated
-bootstrap_session()          # 3. Ensure DB schema exists (runs init_db() once)
-render_user_badge()          # 4. Sidebar: username + logout
-# ... page content ...
-```
-
----
-
-## 7. Data Flow Summary
-
-```
-Uploaded file (PDF/Excel/CSV)
-    │
-    ▼ data_processor.process_uploaded_file()
-    │
-    ├── pdf_parser.py / excel_parser.py / traffic_parser.py / aop_parser.py
-    │   └── universal_parser.py (fallback)
-    │
-    ▼ Normalised DataFrame: [date, segment, outlet, location, pax, revenue]
-    │
-    ▼ database.canonicalize_outlet_name()  ← outlet name normalisation
-    │
-    ▼ database.save_dataframe()  ← INSERT OR IGNORE (dedup by UNIQUE constraint)
-    │
-    ▼ revenue_master table
-    │
-    ▼ Analytics pages: database.load_for_date_range()
-    │
-    ▼ revenue_analysis.*()  ← KPI calculations
-    │
-    ▼ Streamlit display (formatting.py + table_style.py)
-```
-
----
-
-## 8. Environment Setup
-
-```bash
-# Development
-pip install -r requirements.txt
-cp .streamlit/secrets.toml.example .streamlit/secrets.toml
-python modules/generate_password_hash.py  # creates password hashes
-streamlit run Home.py
-
-# Run tests
-python -m pytest tests/ -v  # must show 158 passed, 0 failed
-```
-
----
-
-## 9. Key Versions & Constraints
-
-| Component | Version | Constraint |
-|---|---|---|
-| Python | 3.11+ | Required for `tomllib` (stdlib) |
-| Streamlit | ≥1.36.0 | Required for `st.navigation` + MPA v1 |
-| SQLAlchemy | ≥2.0.0 | Required for `declarative_base()` in modern form |
-| Pandas | ≥2.0.0 | Required for `pd.concat` behavior changes |
-| PostgreSQL | Any | Neon (serverless) preferred for Streamlit Cloud |
-
----
-
-## 10. What NOT to Do
-
-| ❌ Don't | ✅ Do instead |
+| Location | Notes |
 |---|---|
-| Add a new outlet without updating `terminal_mapping.py` | Always add to ALL THREE: `database.py` canonical map + `terminal_mapping.py` + `outlet_groups.py` |
-| Call `database.*` from `revenue_analysis.py` | Pass DataFrames as arguments |
-| Use `df.append()` | Use `pd.concat([df, new_row])` |
-| Store DataFrames in `st.session_state` | Call `database.load_for_date_range()` per page run |
-| Use `float("inf")` in any display path | Use `safe_div()` which returns `np.nan`, then `format_pct()` which returns `"—"` |
-| Modify `outlet_groups.py` without testing page 8 | Run `python -m pytest tests/` after any change |
-| Hardcode display names in page 8 | Use `get_display_name(outlet, location)` |
+| Delhi (IGI) | T1, T2, T3 (domestic, international, arrivals); most outlets |
+| Hyderabad (RGIA) | one terminal, domestic + international |
+| Goa | one terminal, domestic + international |
+| Bhogapuram (Visakhapatnam) | data from Aug 2026 |
+
+```
+EHPL — Encalm Hospitality Pvt Ltd        (segment "EHPL"; business units Lounges / Atithya / Others)
+   Lounges, Spa, Nap & Shower, Atithya (Meet & Greet), Porter, Buggy, Enwrap
+   (baggage wrapping), Business Centre, RDC, bars
+Sky Plates     — in-flight catering (IFK)  (segment "Sky Plates")
+Encalm Eats    — F&B outlets               (segment "Encalm Eats")
+```
+
+Data sources: the daily/historical **revenue workbook** (long "Data" sheet:
+Date, Location, Business, Sub-Business, PAX, Revenue, AOP), the **AOP master**
+(monthly targets, lakhs), **airport traffic** workbooks and the **Encalm Eats
+Master DSR** (one sheet per day, outlet level).
+
+## 3. Architecture
+
+```
+Browser ─▶ (IIS) ─▶ Streamlit
+                     Home.py   set_page_config, CSS, logo, menu (st.navigation)
+                       │        sign-in screen hides the sidebar
+                       ├── views/Uploads.py           Upload Data (default page)
+                       ├── views/Previous_Uploads.py
+                       ├── views/EHPL.py              → business_dashboard.render_ehpl_page
+                       ├── views/Encalm_Eats.py       (own page code + DSR upload tab)
+                       └── views/Sky_Plates.py        → business_dashboard.render_subsidiary_page
+                     every page: require_login() → bootstrap_session() → content
+                       │
+   parsers ────────────┤  data_processor → excel_parser / pdf_parser / universal_parser
+                       │  aop_parser, eats_skyplates_aop_parser, traffic_parser,
+                       │  encalm_eats_dsr_parser
+   reads (cached) ─────┤  cached_db (st.cache_data, 10 min, cleared after writes)
+                       ▼
+                     database.py  (only module that talks SQL) ─▶ SQLite / PostgreSQL
+```
+
+Pages are registered in `Home.py` with the page addresses used before
+(`/Uploads`, `/Previous_Uploads`, `/EHPL`, `/Encalm_Eats`, `/Sky_Plates`).
+They live in `views/`, **not** `pages/` — a `pages/` folder would also be
+served by Streamlit's file-based routing, unstyled.
+
+## 4. Module map
+
+| Module | Purpose | Used by |
+|---|---|---|
+| `auth.py` | PBKDF2 logins from `secrets.toml`, lockout, 30-min inactivity timeout, server-side session tokens | Home, every page |
+| `session.py` | `bootstrap_session` (schema check once per process, daily SQLite backup), active/compare date | pages, business_dashboard |
+| `database.py` | Models, connection (`DATABASE_URL` / SQLite), saves, loads, canonical outlet names, traffic joins, rate limit | most modules |
+| `cached_db.py` | `st.cache_data` wrappers for every render-path read; `clear_data_cache()` | pages, business_dashboard |
+| `data_processor.py` | Upload orchestration: detect format, parse, validate (`_validate_and_clean_with_report`), save | Uploads |
+| `excel_parser.py` | Revenue workbooks (long Data sheet, pivots); records skipped rows | data_processor |
+| `import_report.py` | "Rows not imported" report: Excel row, reason; accepted date window | data_processor, excel_parser, upload_status |
+| `pdf_parser.py`, `universal_parser.py`, `ingestion/` | PDF and other formats; generic schema detection pipeline | data_processor |
+| `aop_parser.py` | EHPL AOP from the AOP master (outlet × month) and daily-total formats | Uploads |
+| `eats_skyplates_aop_parser.py` | Sky Plates (IFK) and Encalm Eats (F&B) AOP; AOP→DSR outlet map; `load_segment_aop`, `align_aop_to_outlets` | Uploads, Encalm Eats, business_dashboard |
+| `encalm_eats_dsr_parser.py` | Master DSR (per-day sheets, Delhi/Bhogapuram sections) | Encalm Eats |
+| `traffic_parser.py` | Airport traffic workbooks | Uploads |
+| `business_dashboard.py` | Filter bar, KPI cards, charts, EHPL tables (`_build_location_report`), subsidiary tables | EHPL, Sky Plates, Encalm Eats |
+| `ehpl_layout.py` | EHPL table sections per location and rendering; terminal table | business_dashboard |
+| `outlet_groups.py` | EHPL groups, display names, per-location overrides, `ALWAYS_SHOW_ROWS` | business_dashboard |
+| `terminal_mapping.py` | Outlet → terminal traffic pool | database, business_dashboard, ehpl_layout |
+| `revenue_analysis.py` | Pure KPI/comparison functions (no DB) | dashboards |
+| `comparison_widget.py`, `date_picker.py`, `date_utils.py` | Compare-by selector, date dropdowns, date helpers | dashboards |
+| `charts.py`, `table_style.py`, `formatting.py`, `ui.py` | Plotly charts, table colours, Indian number format, branding/CSS/icons | dashboards, pages |
+| `upload_status.py`, `app_logger.py` | Upload result panels; error logging / `safe_run` | Uploads, dashboards |
+| `format_registry.py` | What is in an uploaded file, sheet by sheet: layout, reader, confidence, rows, dates, result | Uploads, Encalm Eats |
+| `upload_checks.py` | Checks before saving: reconcile, new outlets, changes vs stored, copied days, anomalies | Uploads, Encalm Eats |
+| `analyse_panel.py` | The Analyse panel (confidence, identification, checks, preview) | Uploads, Encalm Eats |
+| `layout_learning.py`, `mapping_editor.py` | Unknown layouts: propose column roles, apply a confirmed mapping, saved layouts (`parse_template`) | Uploads |
+| `insights.py`, `segment_tree_view.py`, `lounge_capacity.py` | From the earlier multi-page version; not used by the current pages | — |
+
+## 5. Data flow
+
+1. **Revenue upload** → `data_processor.process_uploaded_file` → parser →
+   validation (dates, blanks, duplicates, month-end lines added together,
+   skipped rows reported) → `database.save_dataframe` / `save_dataframe_batched_v2`
+   (canonical outlet names, segment mapping) → `revenue_master`.
+2. **AOP upload** → `aop_parser.parse_aop_auto` (EHPL) +
+   `eats_skyplates_aop_parser.parse_eats_and_skyplates_aop` (Sky Plates, Eats) →
+   optional delete of the months covered → `aop_target`.
+3. **Traffic upload** → `traffic_parser` → `airport_traffic`.
+4. **DSR upload** → `encalm_eats_dsr_parser.parse_dsr` → `encalm_eats_dsr`.
+5. Every write calls `cached_db.clear_data_cache()`.
+6. **Dashboards** read through `cached_db`, filter by location/period,
+   build tables (EHPL: [DATA_MAPPINGS.md](DATA_MAPPINGS.md) §2) and prorate AOP
+   ([BUSINESS_RULES.md](BUSINESS_RULES.md)).
+
+## 6. Configuration
+
+| Setting | Where |
+|---|---|
+| Logins (`[auth.users]`, `[auth.admins]`) | `.streamlit/secrets.toml` (never in git; `create_secrets.py` writes it) |
+| `DATABASE_URL` (optional) | environment variable or `secrets.toml` |
+| `DATA_DIR` (optional) | environment variable — folder for the SQLite file |
+| Theme, upload size (300 MB), port | `.streamlit/config.toml` |
+| Render test hosting | `render.yaml` (optional) |
+
+## 7. Tests
+
+`tests/unit` (parsers, KPI maths, EHPL line items, rows-not-imported, auth),
+`tests/integration` (database), `tests/smoke` (every module imports).
+`conftest.py` mocks Streamlit where needed. All 308 must pass before pushing.

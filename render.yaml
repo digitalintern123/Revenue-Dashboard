@@ -1,0 +1,26 @@
+# Render Blueprint — https://render.com/docs/blueprint-spec
+# Deploys the Streamlit app as a long-running web service.
+services:
+  - type: web
+    name: revenue-dashboard
+    runtime: python
+    plan: free  # free instances sleep after 15 min idle; use "starter" for always-on + more RAM
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    # Render mounts Secret Files at /etc/secrets/<name>. Copy secrets.toml
+    # (auth users, admins, etc.) to where Streamlit and modules/auth.py look.
+    startCommand: >-
+      mkdir -p .streamlit &&
+      if [ -f /etc/secrets/secrets.toml ]; then cp /etc/secrets/secrets.toml .streamlit/secrets.toml; fi &&
+      streamlit run Home.py
+      --server.port $PORT
+      --server.address 0.0.0.0
+      --server.headless true
+    healthCheckPath: /_stcore/health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      # Postgres connection string (e.g. Neon or Render Postgres).
+      # Without it the app falls back to SQLite and loses data on every deploy/restart.
+      - key: DATABASE_URL
+        sync: false

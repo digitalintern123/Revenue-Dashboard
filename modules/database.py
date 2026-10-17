@@ -16,6 +16,7 @@ from __future__ import annotations
 import calendar
 import datetime as dt
 import os
+import re
 from typing import Optional
 
 import pandas as pd
@@ -29,11 +30,13 @@ from sqlalchemy import (
     UniqueConstraint,
     and_ as sql_and,
     create_engine,
+    event,
     func,
     or_ as sql_or,
     select,
     text,
 )
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -52,13 +55,19 @@ from .date_utils import safe_month_shift as _safe_month_shift
 # Local development:
 #   Set DATABASE_URL env var, or it falls back to SQLite automatically.
 
-def _get_database_url() -> str:
-    """Read DATABASE_URL from Streamlit secrets or environment.
+_SECRETS_SOURCE = ".streamlit/secrets.toml (Render Secret File)"
+_ENV_SOURCE = "DATABASE_URL environment variable"
+
+
+def _database_url_candidates() -> list[tuple[str, str]]:
+    """Every configured DATABASE_URL as (raw value, where it came from),
+    secrets.toml first, then the environment.
 
     Reads the secrets.toml file directly with tomllib instead of importing
     streamlit at module level. Importing streamlit here adds 3-6 seconds to
     startup time on Windows because it triggers Streamlit full initialisation.
     """
+    found: list[tuple[str, str]] = []
     try:
         import pathlib as _pl
         _secrets_path = _pl.Path(__file__).parent.parent / ".streamlit" / "secrets.toml"
@@ -73,17 +82,27 @@ def _get_database_url() -> str:
             if _toml is not None:
                 _raw = _secrets_path.read_text(encoding="utf-8")
                 _parsed = _toml.loads(_raw)
-                url = _parsed.get("DATABASE_URL", "")
-                if url:
-                    return str(url).strip()
+                url = str(_parsed.get("DATABASE_URL", "") or "")
+                if url.strip():
+                    found.append((url, _SECRETS_SOURCE))
     except Exception:
         pass
-    url = os.environ.get("DATABASE_URL", "").strip()
-    if url:
-        return url
-    # Local SQLite fallback — try data/ dir first, then /tmp
-    _repo_root = os.path.dirname(os.path.dirname(__file__))
-    _local_db = os.path.join(_repo_root, "data", "revenue_analytics.db")
+    url = os.environ.get("DATABASE_URL", "")
+    if url.strip():
+        found.append((url, _ENV_SOURCE))
+    return found
+
+
+def sqlite_data_dir() -> str:
+    """Folder for the SQLite file: $DATA_DIR (e.g. a Render persistent disk
+    mounted at /var/data), else the repo's data/ folder."""
+    return os.environ.get("DATA_DIR", "").strip() or os.path.join(
+        os.path.dirname(os.path.dirname(__file__)), "data")
+
+
+def _local_sqlite_url() -> str:
+    """SQLite in sqlite_data_dir() — falls back to /tmp if that isn't writable."""
+    _local_db = os.path.join(sqlite_data_dir(), "revenue_analytics.db")
     try:
         os.makedirs(os.path.dirname(_local_db), exist_ok=True)
         # Test writability
@@ -93,7 +112,75 @@ def _get_database_url() -> str:
     except OSError:
         return "sqlite:////tmp/revenue_analytics.db"
 
-_DATABASE_URL = _get_database_url()
+
+_PG_URL_RE = re.compile(r"postgres(?:ql)?(?:\+\w+)?://[^\s'\"]+")
+
+
+def _normalize_database_url(raw: str) -> str:
+    """Pull the database URL out of whatever was pasted into DATABASE_URL.
+
+    Hosting dashboards make it easy to paste more than the bare URL, e.g.
+    Neon's "psql 'postgresql://...'" snippet, a value wrapped in quotes, a
+    "DATABASE_URL = ..." prefix, a trailing newline or an invisible
+    zero-width character. The postgres URL is found wherever it sits.
+    SQLAlchemy 2 also rejects the legacy "postgres://" scheme.
+    Passwords with special characters (@ : / #) must be URL-encoded
+    (e.g. @ -> %40); Neon and Render already give them encoded.
+    Returns "" when no postgres/sqlite URL can be found.
+    """
+    text_ = (raw or "").strip()
+    if text_.startswith("sqlite"):
+        return text_
+    m = _PG_URL_RE.search(text_)
+    if not m:
+        return ""
+    url = m.group(0)
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://"):]
+    # SQLAlchemy 2.1 maps a bare "postgresql://" to psycopg (v3), but this
+    # project installs psycopg2-binary — name the driver explicitly.
+    if url.startswith("postgresql://"):
+        url = "postgresql+psycopg2://" + url[len("postgresql://"):]
+    return url
+
+
+def _describe_bad_value(raw: str) -> str:
+    """Safe hint about a bad value without revealing credentials: the first
+    4 characters (invisible ones escaped), the length, and a few flags."""
+    head = "".join(c if c.isprintable() and c != "\\" else f"\\u{ord(c):04x}" for c in raw[:4])
+    hints = [f"starts with '{head}'", f"{len(raw)} characters"]
+    if "://" not in raw:
+        hints.append("no '://' found")
+    if any(not c.isprintable() for c in raw.strip()):
+        hints.append("contains invisible characters")
+    return ", ".join(hints)
+
+
+def _resolve_database_url() -> str:
+    candidates = _database_url_candidates()
+    if not candidates:
+        return _local_sqlite_url()
+    for raw, source in candidates:
+        url = _normalize_database_url(raw)
+        if url:
+            if source != candidates[0][1]:
+                import logging
+                logging.getLogger(__name__).warning(
+                    "Ignoring invalid DATABASE_URL in %s; using the %s instead.",
+                    candidates[0][1], source,
+                )
+            return url
+    # Never echo the value itself: it contains the database password.
+    problems = "; ".join(f"{src}: {_describe_bad_value(raw)}" for raw, src in candidates)
+    raise ValueError(
+        f"DATABASE_URL is not a valid database URL ({problems}). It must contain "
+        "a connection string starting with 'postgresql://' "
+        "(e.g. postgresql://user:password@host/dbname?sslmode=require). "
+        "Fix or remove the value in the place named above."
+    )
+
+
+_DATABASE_URL = _resolve_database_url()
 _IS_POSTGRES = _DATABASE_URL.startswith(("postgresql", "postgres"))
 # DB_PATH kept as a string alias for the URL (used in some legacy references)
 DB_PATH = _DATABASE_URL
@@ -101,10 +188,18 @@ DB_PATH = _DATABASE_URL
 if _IS_POSTGRES:
     # Enforce SSL/TLS — add sslmode=require if not already present.
     # Never allow unencrypted connections to the production database.
+    # A database on the same machine (VPS: localhost / unix socket) never
+    # leaves the server, so it is exempt; an explicit sslmode always wins.
     _pg_url = _DATABASE_URL
-    if "sslmode=" not in _pg_url:
+    _pg_local = (make_url(_pg_url).host or "localhost") in ("localhost", "127.0.0.1", "::1")
+    if "sslmode=" not in _pg_url and not _pg_local:
         _sep = "&" if "?" in _pg_url else "?"
         _pg_url = _pg_url + _sep + "sslmode=require"
+    # 60s query timeout via the libpq "options" startup parameter. Connection
+    # poolers (Neon's "-pooler" hosts run PgBouncer) reject unknown startup
+    # parameters, so only send it for direct connections.
+    _pg_host = make_url(_pg_url).host or ""
+    _connect_args = {} if "pooler" in _pg_host else {"options": "-c statement_timeout=60000"}
     ENGINE = create_engine(
         _pg_url,
         pool_pre_ping=True,    # handles Neon scale-to-zero reconnection
@@ -112,14 +207,62 @@ if _IS_POSTGRES:
         max_overflow=10,
         pool_timeout=60,
         pool_recycle=1800,     # recycle connections every 30 min
-        connect_args={"options": "-c statement_timeout=60000"},  # 60s query timeout
+        connect_args=_connect_args,
     )
 else:
     ENGINE = create_engine(
         _DATABASE_URL,
         connect_args={"check_same_thread": False, "timeout": 30},
     )
+
+    @event.listens_for(ENGINE, "connect")
+    def _sqlite_pragmas(dbapi_conn, _record):
+        # WAL lets dashboards keep reading while an upload is writing;
+        # NORMAL sync is safe with WAL and much faster than FULL.
+        cur = dbapi_conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL")
+        cur.execute("PRAGMA synchronous=NORMAL")
+        cur.execute("PRAGMA busy_timeout=30000")
+        cur.close()
+
 SessionLocal = sessionmaker(bind=ENGINE)
+
+
+def sqlite_db_path() -> Optional[str]:
+    """Filesystem path of the SQLite database, or None when using Postgres."""
+    if _IS_POSTGRES:
+        return None
+    return ENGINE.url.database
+
+
+def backup_sqlite(backup_dir: Optional[str] = None, keep: int = 7) -> Optional[str]:
+    """Copy the live SQLite database to <backup_dir>/revenue_analytics_YYYY-MM-DD.db
+    with SQLite's online backup API (safe while the app is running) and keep
+    the newest `keep` copies. No-op for Postgres. Returns the backup path."""
+    import glob
+    import sqlite3
+
+    src_path = sqlite_db_path()
+    if not src_path or not os.path.exists(src_path):
+        return None
+    backup_dir = backup_dir or os.path.join(os.path.dirname(src_path), "backups")
+    os.makedirs(backup_dir, exist_ok=True)
+    dest = os.path.join(backup_dir, f"revenue_analytics_{dt.date.today().isoformat()}.db")
+    src = sqlite3.connect(src_path)
+    try:
+        out = sqlite3.connect(dest)
+        try:
+            src.backup(out)
+        finally:
+            out.close()
+    finally:
+        src.close()
+    for old in sorted(glob.glob(os.path.join(backup_dir, "revenue_analytics_*.db")))[:-keep]:
+        try:
+            os.remove(old)
+        except OSError:
+            pass
+    return dest
 
 def _read_sql(query) -> pd.DataFrame:
     """
@@ -407,6 +550,84 @@ class EncalmEatsDSR(Base):
         Index("ix_eats_dsr_outlet", "outlet"),
         Index("ix_eats_dsr_location", "location"),
     )
+
+
+class ParseTemplate(Base):
+    """
+    A "saved layout": a file layout the app did not know, whose columns a
+    user mapped once on the upload screen (modules/layout_learning.py).
+    The next upload whose headers match `fingerprint` is read with
+    `mapping` automatically. kind = "revenue" | "traffic".
+    """
+    __tablename__ = "parse_template"
+
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    kind        = Column(String, nullable=False)
+    name        = Column(String, nullable=False)
+    fingerprint = Column(String, nullable=False)   # JSON list of normalised headers
+    mapping     = Column(String, nullable=False)   # JSON (layout_learning.mapping_to_saved)
+    header_row  = Column(Integer, nullable=False, default=0)
+    constants   = Column(String, nullable=False, default="{}")   # JSON
+    created_by  = Column(String, nullable=True)
+    created_at  = Column(String, nullable=False, default="")
+    last_used   = Column(String, nullable=True)
+    times_used  = Column(Integer, nullable=False, default=0)
+
+    __table_args__ = (UniqueConstraint("kind", "name", name="uq_parse_template_kind_name"),)
+
+
+def save_parse_template(kind: str, name: str, fingerprint: list, mapping: dict,
+                        header_row: int, constants: dict, created_by: str = "") -> int:
+    """Store (or overwrite, same kind + name) a saved layout. Returns its id."""
+    import json
+    now = dt.datetime.now().isoformat(timespec="seconds")
+    with SessionLocal() as session:
+        row = session.execute(select(ParseTemplate).where(
+            ParseTemplate.kind == kind, ParseTemplate.name == name)).scalar_one_or_none()
+        if row is None:
+            row = ParseTemplate(kind=kind, name=name, created_at=now, times_used=0)
+            session.add(row)
+        row.fingerprint = json.dumps(fingerprint)
+        row.mapping = json.dumps(mapping)
+        row.header_row = int(header_row)
+        row.constants = json.dumps(constants or {})
+        row.created_by = created_by
+        session.commit()
+        return row.id
+
+
+def list_parse_templates(kind: Optional[str] = None) -> list[dict]:
+    """Saved layouts as dicts (JSON fields decoded), newest first."""
+    import json
+    with SessionLocal() as session:
+        q = select(ParseTemplate).order_by(ParseTemplate.id.desc())
+        if kind:
+            q = q.where(ParseTemplate.kind == kind)
+        rows = session.execute(q).scalars().all()
+        return [{"id": r.id, "kind": r.kind, "name": r.name,
+                 "fingerprint": json.loads(r.fingerprint), "mapping": json.loads(r.mapping),
+                 "header_row": r.header_row, "constants": json.loads(r.constants or "{}"),
+                 "created_by": r.created_by, "created_at": r.created_at,
+                 "last_used": r.last_used, "times_used": r.times_used} for r in rows]
+
+
+def mark_parse_template_used(template_id: int) -> None:
+    with SessionLocal() as session:
+        row = session.get(ParseTemplate, template_id)
+        if row is not None:
+            row.times_used = (row.times_used or 0) + 1
+            row.last_used = dt.datetime.now().isoformat(timespec="seconds")
+            session.commit()
+
+
+def delete_parse_template(template_id: int) -> bool:
+    with SessionLocal() as session:
+        row = session.get(ParseTemplate, template_id)
+        if row is None:
+            return False
+        session.delete(row)
+        session.commit()
+        return True
 
 
 def save_encalm_eats_dsr(
@@ -1150,22 +1371,29 @@ def save_dataframe_batched(
     return {"inserted": total_inserted, "skipped": total_skipped, "total_rows": total}
 
 
+_FALLBACK_BATCH_ROWS = 10000  # rows per chunk when COPY isn't available (SQLite)
+
+
 def save_dataframe_batched_v2(
     df: pd.DataFrame,
     source_file: str,
     progress_callback=None,
+    replace: bool = False,
 ) -> dict:
     """
     Fast bulk save using PostgreSQL COPY FROM STDIN.
     Sends 50K rows in a single network call — ~5-10 seconds vs minutes.
     Falls back to chunked inserts for SQLite.
+
+    replace=True (see save_dataframe) always uses the chunked path: each
+    batch holds whole dates, and its delete and insert share a transaction.
     """
     if df.empty:
-        return {"inserted": 0, "skipped": 0, "total_rows": 0}
+        return {"inserted": 0, "skipped": 0, "total_rows": 0, "replaced": 0}
 
     total = len(df)
 
-    if _IS_POSTGRES:
+    if _IS_POSTGRES and not replace:
         import datetime as _dt
         now_str = _dt.datetime.now().isoformat(timespec="seconds")
 
@@ -1189,6 +1417,8 @@ def save_dataframe_batched_v2(
         work["date"]          = pd.to_datetime(work["date"]).dt.strftime("%Y-%m-%d")
         for col in ("pax", "revenue", "aop", "traffic"):
             work[col] = pd.to_numeric(work.get(col, None), errors="coerce") if col in work.columns else None
+        work = combine_duplicate_revenue_rows(work, ["date", "outlet", "location"])
+        total = len(work)
         work["source_file"] = source_file
         work["uploaded_at"] = now_str
 
@@ -1208,23 +1438,44 @@ def save_dataframe_batched_v2(
             if progress_callback:
                 progress_callback(0.3, f"COPY failed ({copy_err}) — switching to chunked insert…")
 
-    # Fallback: chunked executemany
+    # Fallback: chunked executemany.
+    # Batches are cut only at date boundaries: save_dataframe adds together
+    # lines that share (date, outlet, location) — month-end second lines and
+    # outlet names that canonicalize to the same outlet — but only within one
+    # batch. Cutting by row position put such lines in different batches, so
+    # the later one hit the unique constraint and was dropped as a
+    # "duplicate" (₹5.25 Cr lost on one historical workbook).
     total_inserted = 0
     total_skipped  = 0
-    batch_size = 10000
-    for start in range(0, total, batch_size):
-        batch_df = df.iloc[start:start + batch_size].copy()
-        result = save_dataframe(batch_df, source_file, record_upload=False)
+    total_replaced = 0
+    batch_size = _FALLBACK_BATCH_ROWS
+    work = df.assign(_batch_date=pd.to_datetime(df["date"], errors="coerce")).sort_values(
+        "_batch_date", kind="stable")
+    date_sizes = work.groupby("_batch_date", sort=True, dropna=False).size()
+    batches, current, current_n = [], [], 0
+    for day, n in date_sizes.items():
+        current.append(day)
+        current_n += n
+        if current_n >= batch_size:
+            batches.append(current)
+            current, current_n = [], 0
+    if current:
+        batches.append(current)
+    done = 0
+    for days in batches:
+        batch_df = work[work["_batch_date"].isin(days)].drop(columns="_batch_date")
+        result = save_dataframe(batch_df, source_file, record_upload=False, replace=replace)
         total_inserted += result["inserted"]
         total_skipped  += result["skipped"]
-        pct = min((start + batch_size) / total, 1.0)
+        total_replaced += result.get("replaced", 0)
+        done += len(batch_df)
         if progress_callback:
-            progress_callback(pct, f"{total_inserted:,} saved ({start + len(batch_df):,}/{total:,})")
+            progress_callback(min(done / total, 1.0), f"{total_inserted:,} saved ({done:,}/{total:,})")
 
     # Record the upload in upload_log — batched save skips this per-batch
     # so we do it once here after all batches complete.
     if total_inserted > 0:
-        report_date = _to_date(df["date"].iloc[0]) if "date" in df.columns else None
+        report_date = _to_date(max(df["date"])) if "date" in df.columns else None
         with ENGINE.connect() as _conn:
             _rev = _conn.execute(
                 select(func.coalesce(func.sum(RevenueMaster.revenue), 0.0))
@@ -1243,7 +1494,8 @@ def save_dataframe_batched_v2(
             upload_type="Revenue",
         )
 
-    return {"inserted": total_inserted, "skipped": total_skipped, "total_rows": total}
+    return {"inserted": total_inserted, "skipped": total_skipped, "total_rows": total,
+            "replaced": total_replaced}
 
 
 def _pg_copy_insert(df: pd.DataFrame, table: str, columns: list[str]) -> int:
@@ -1316,10 +1568,53 @@ def _pg_copy_insert(df: pd.DataFrame, table: str, columns: list[str]) -> int:
             except: pass
 
 
+def combine_duplicate_revenue_rows(df: pd.DataFrame, keys: list) -> pd.DataFrame:
+    """
+    Collapse rows that share the same key into ONE row instead of dropping
+    all but one.
+
+    Revenue workbooks put month-end lines (fixed fees, rentals, card-billing
+    true-ups) on a second row with the same date + outlet as that day's
+    normal figures, and the finance pivot adds the two together. Several
+    raw outlet names also canonicalize to one outlet (e.g. Hyderabad
+    "Dom Prive" and "Prive"). Keeping only one of those rows silently lost
+    revenue, and which one survived depended on row order.
+
+      1. Exact duplicate rows (every column equal) are dropped first, so a
+         block pasted twice is not double counted.
+      2. Remaining rows with the same key are combined: pax / revenue / aop
+         are summed (NaN when every line is blank); traffic, an airport-wide
+         figure repeated on each line, takes the max; text columns keep the
+         value from the line with the most revenue.
+    """
+    if df is None or df.empty:
+        return df
+    work = df.drop_duplicates()
+    if not work.duplicated(subset=keys, keep=False).any():
+        return work.reset_index(drop=True)
+
+    sum_cols = [c for c in ("pax", "revenue", "aop") if c in work.columns]
+    for c in sum_cols + (["traffic"] if "traffic" in work.columns else []):
+        work[c] = pd.to_numeric(work[c], errors="coerce")
+    order = work["revenue"].fillna(0).abs() if "revenue" in work.columns else None
+    if order is not None:
+        work = work.assign(_ord=order).sort_values("_ord", ascending=False, kind="stable").drop(columns="_ord")
+
+    agg = {c: (lambda s: s.sum(min_count=1)) for c in sum_cols}
+    if "traffic" in work.columns:
+        agg["traffic"] = "max"
+    for c in work.columns:
+        if c not in keys and c not in agg:
+            agg[c] = "first"
+    out = work.groupby(keys, as_index=False, sort=False, dropna=False).agg(agg)
+    return out[[c for c in df.columns if c in out.columns]].reset_index(drop=True)
+
+
 def save_dataframe(
     df: pd.DataFrame,
     source_file: str,
     record_upload: bool = True,
+    replace: bool = False,
 ) -> dict:
     """
     Insert a normalized revenue DataFrame into revenue_master.
@@ -1332,10 +1627,15 @@ def save_dataframe(
     "INSERT OR IGNORE" so large historical imports (50K+ rows) complete in
     a couple of seconds rather than minutes.
 
-    Returns a dict summary: {"inserted": int, "skipped": int, "total_rows": int}
+    replace=True: stored rows for every (location, date) in the file are
+    deleted first, in the same transaction, so the file's figures replace
+    them (including lines the file no longer has for those dates).
+
+    Returns a dict summary: {"inserted": int, "skipped": int, "total_rows": int,
+    "replaced": int}
     """
     if df.empty:
-        return {"inserted": 0, "skipped": 0, "total_rows": 0}
+        return {"inserted": 0, "skipped": 0, "total_rows": 0, "replaced": 0}
 
     required_cols = {"date", "segment", "outlet", "location"}
     missing = required_cols - set(df.columns)
@@ -1389,6 +1689,11 @@ def save_dataframe(
         else:
             work[col] = None
 
+    # Lines that now share (date, outlet, location) — month-end second lines,
+    # or raw names that canonicalize to the same outlet — are added together
+    # rather than all but one being dropped by ON CONFLICT DO NOTHING.
+    work = combine_duplicate_revenue_rows(work, ["date", "outlet", "location"])
+
     # Attach the upload-context fields.
     work["source_file"]  = source_file
     work["uploaded_at"]  = now_str
@@ -1399,6 +1704,13 @@ def save_dataframe(
         ["date", "segment", "business_unit", "outlet", "location",
          "pax", "revenue", "aop", "traffic", "source_file", "uploaded_at"]
     ].to_dict("records")
+    # Blank figures must be stored as NULL. SQLite turns a float NaN into
+    # NULL itself, but PostgreSQL stores a real NaN — and SUM() over a column
+    # containing NaN is NaN (upload-history totals, AOP sums, ...).
+    records = [
+        {k: (None if isinstance(v, float) and v != v else v) for k, v in r.items()}
+        for r in records
+    ]
 
     insert_sql = text(
         """
@@ -1414,7 +1726,10 @@ def save_dataframe(
     # 5000 rows/chunk = ~10 round trips for a 50K file vs 25 at chunk=2000.
     CHUNK = 5000
     inserted = 0
+    replaced = 0
     with ENGINE.begin() as conn:
+        if replace:
+            replaced = _delete_revenue_rows(conn, work)
         for i in range(0, len(records), CHUNK):
             chunk = records[i:i + CHUNK]
             result = conn.execute(insert_sql, chunk)
@@ -1433,7 +1748,7 @@ def save_dataframe(
     skipped = len(records) - inserted
 
     if record_upload:
-        report_date = _to_date(df["date"].iloc[0]) if "date" in df.columns else None
+        report_date = _to_date(max(df["date"])) if "date" in df.columns else None
         # Sum revenue/PAX for only the rows this call actually inserted,
         # not the whole parsed file — every record just inserted carries
         # this exact (source_file, uploaded_at) pair (uploaded_at is a
@@ -1465,7 +1780,26 @@ def save_dataframe(
             upload_type="Revenue",
         )
 
-    return {"inserted": inserted, "skipped": skipped, "total_rows": len(df)}
+    return {"inserted": inserted, "skipped": skipped, "total_rows": len(df),
+            "replaced": replaced}
+
+
+def _delete_revenue_rows(conn, work: pd.DataFrame) -> int:
+    """Delete revenue_master rows for every (location, date) in `work`
+    (location as stored, dates as ISO strings) on the open connection
+    `conn`, so the caller's insert runs in the same transaction."""
+    deleted = 0
+    for loc, grp in work.groupby("location"):
+        dates = sorted(set(grp["date"]))
+        for i in range(0, len(dates), 500):
+            result = conn.execute(
+                RevenueMaster.__table__.delete().where(
+                    (RevenueMaster.location == loc)
+                    & (RevenueMaster.date.in_([_to_date(d) for d in dates[i:i + 500]]))
+                )
+            )
+            deleted += result.rowcount or 0
+    return deleted
 
 
 def _record_upload_history(
@@ -1529,6 +1863,52 @@ def delete_upload_by_filename(file_name: str) -> dict:
     return counts
 
 
+def _delete_traffic_rows(work: pd.DataFrame) -> int:
+    """Delete airport_traffic rows for the (location, granularity, date)
+    keys in `work` (dates as ISO strings). Returns rows deleted."""
+    deleted = 0
+    with ENGINE.begin() as conn:
+        for (loc, gran), grp in work.groupby(["location", "granularity"]):
+            dates = sorted(set(grp["date"]))
+            for i in range(0, len(dates), 500):
+                result = conn.execute(
+                    AirportTraffic.__table__.delete().where(
+                        (AirportTraffic.location == loc)
+                        & (AirportTraffic.granularity == gran)
+                        & (AirportTraffic.date.in_([_to_date(d) for d in dates[i:i + 500]]))
+                    )
+                )
+                deleted += result.rowcount or 0
+    return deleted
+
+
+def delete_aop_targets_for_months(year_months) -> int:
+    """
+    Delete every aop_target row whose (year, month) is in `year_months`.
+
+    Used by the AOP import's "replace" option: save_aop_targets() skips rows
+    whose key already exists (ON CONFLICT DO NOTHING), so a corrected AOP
+    file could never overwrite earlier values — including the LA22 rows an
+    older parser stored at 3x. Clearing the months a new file covers, once,
+    before saving, makes the new file authoritative for those months
+    regardless of what the earlier file was called.
+    Returns the number of rows deleted.
+    """
+    pairs = sorted({(int(y), int(m)) for y, m in year_months})
+    if not pairs:
+        return 0
+    deleted = 0
+    with ENGINE.begin() as conn:
+        for y, m in pairs:
+            result = conn.execute(
+                AOPTarget.__table__.delete().where(
+                    (AOPTarget.year == y) & (AOPTarget.month == m)
+                )
+            )
+            deleted += result.rowcount or 0
+    return deleted
+
+
 def _to_date(value) -> dt.date:
     if isinstance(value, dt.date) and not isinstance(value, dt.datetime):
         return value
@@ -1550,6 +1930,29 @@ def _to_float_or_none(value):
 # ---------------------------------------------------------------------------
 # Reading data
 # ---------------------------------------------------------------------------
+
+def get_stored_outlets() -> pd.DataFrame:
+    """Every (location, outlet) stored in revenue_master with its last date —
+    used by the upload checks to spot outlets never seen before."""
+    return _read_sql(text(
+        "SELECT location, outlet, MAX(date) AS last_date FROM revenue_master "
+        "GROUP BY location, outlet"))
+
+
+def normalise_revenue_keys(df: pd.DataFrame) -> pd.DataFrame:
+    """The (date, location, outlet) keys and figures exactly as save_dataframe
+    would store them (canonical outlet names, title-case location, same-key
+    lines added together) — for comparing a parsed file with stored data."""
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["date", "location", "outlet", "pax", "revenue"])
+    work = df[["date", "location", "outlet", "pax", "revenue"]].copy()
+    work["outlet"] = work["outlet"].astype(str).str.strip().map(canonicalize_outlet_name)
+    work["location"] = work["location"].astype(str).str.strip().str.title()
+    work["date"] = pd.to_datetime(work["date"]).dt.strftime("%Y-%m-%d")
+    for c in ("pax", "revenue"):
+        work[c] = pd.to_numeric(work[c], errors="coerce")
+    return combine_duplicate_revenue_rows(work, ["date", "outlet", "location"])
+
 
 def load_all() -> pd.DataFrame:
     """Load the entire revenue_master table as a DataFrame."""
@@ -1603,7 +2006,7 @@ def load_for_date_range(start_date: dt.date, end_date: dt.date) -> pd.DataFrame:
 # Airport traffic: save, load, and join against revenue
 # ---------------------------------------------------------------------------
 
-def save_traffic_dataframe(df: pd.DataFrame, source_file: str) -> dict:
+def save_traffic_dataframe(df: pd.DataFrame, source_file: str, replace: bool = False) -> dict:
     """
     Insert a (date, location, terminal, traffic, granularity, period_end)
     DataFrame into airport_traffic. `terminal` and `period_end` are
@@ -1613,6 +2016,11 @@ def save_traffic_dataframe(df: pd.DataFrame, source_file: str) -> dict:
     dedup behavior as save_dataframe() for revenue — re-uploading a
     traffic file you've already loaded is a harmless no-op that reports
     how many rows were skipped.
+
+    replace=True first deletes the stored rows for every (location,
+    granularity, date) in the file — all terminals — so a corrected file
+    overwrites earlier figures for exactly those airports and dates
+    (`replaced` in the result). Other dates and airports are untouched.
     """
     if df.empty:
         return {"inserted": 0, "skipped": 0, "total_rows": 0}
@@ -1674,6 +2082,8 @@ def save_traffic_dataframe(df: pd.DataFrame, source_file: str) -> dict:
     cols = ["date", "period_end", "granularity", "location", "terminal",
             "traffic", "source_file", "uploaded_at"]
 
+    replaced = _delete_traffic_rows(work_t) if replace else 0
+
     # Fast path: PostgreSQL COPY
     if _IS_POSTGRES:
         try:
@@ -1698,7 +2108,7 @@ def save_traffic_dataframe(df: pd.DataFrame, source_file: str) -> dict:
     else:
         records = work_t[cols].to_dict("records")
         if not records:
-            return {"inserted": 0, "skipped": 0, "total_rows": len(df)}
+            return {"inserted": 0, "skipped": 0, "total_rows": len(df), "replaced": replaced}
         insert_sql = text("""
             INSERT INTO airport_traffic
                 (date, period_end, granularity, location, terminal, traffic, source_file, uploaded_at)
@@ -1739,7 +2149,7 @@ def save_traffic_dataframe(df: pd.DataFrame, source_file: str) -> dict:
         upload_type="Traffic",
     )
 
-    return {"inserted": inserted, "skipped": skipped, "total_rows": len(df)}
+    return {"inserted": inserted, "skipped": skipped, "total_rows": len(df), "replaced": replaced}
 
 
 def load_traffic_for_date_range(start_date: dt.date, end_date: dt.date) -> pd.DataFrame:
@@ -1841,7 +2251,9 @@ def get_traffic_total_for_range(
         daily_rows = group[group["granularity"] == "daily"]
         monthly_rows = group[group["granularity"] == "monthly"]
 
-        daily_dates_covered = set(daily_rows["date"])
+        # SQLite returns ISO strings; compare real dates, or every day would
+        # look uncovered and a monthly row would be added on top of the daily ones
+        daily_dates_covered = {_to_date(d) for d in daily_rows["date"]}
         all_dates_in_range = {start_date + dt.timedelta(days=i) for i in range(total_days)}
         missing_dates = all_dates_in_range - daily_dates_covered
 
@@ -1892,6 +2304,12 @@ def get_traffic_total_for_range(
 
     return pd.DataFrame(results)
 
+
+
+# The traffic joins below read terminal traffic through this hook. It is the
+# plain SQL loader here; modules/cached_db.py swaps in a Streamlit-cached
+# version so repeated joins on one page (and on every rerun) don't re-query.
+_traffic_totals_loader = get_traffic_total_for_range
 
 def _load_traffic_overlapping_range(
     start_date: dt.date, end_date: dt.date, location: Optional[str] = None
@@ -2011,7 +2429,7 @@ def join_revenue_with_traffic(revenue_df: pd.DataFrame, traffic_df: Optional[pd.
     location_totals["date"] = start_date
 
     if traffic_df is None:
-        traffic_totals = get_traffic_total_for_range(start_date, end_date)
+        traffic_totals = _traffic_totals_loader(start_date, end_date)
         if traffic_totals.empty:
             location_totals["traffic"] = pd.NA
             location_totals["traffic_is_estimated"] = False
@@ -2070,7 +2488,7 @@ def join_revenue_with_traffic_by_outlet(
     start_date, end_date = dates.min(), dates.max()
 
     # Get all terminal-level traffic for this date range
-    traffic_totals = get_traffic_total_for_range(start_date, end_date)
+    traffic_totals = _traffic_totals_loader(start_date, end_date)
     # Build lookup: (location, terminal) → traffic info
     # Normalise location to title-case so "GOA"/"DELHI" (revenue) matches
     # "Goa"/"Delhi" (traffic) in the lookup.
@@ -2176,8 +2594,8 @@ def join_revenue_with_traffic_by_outlet(
 
         if terminal == "All":
             # M&G / Atithya: entire airport
-            # Delhi: all 8 terminal pools; HYD/GOA: Domestic + International
-            if location in ("Hyderabad", "Goa"):
+            # Delhi: all 8 terminal pools; HYD/GOA/Bhogapuram: Domestic + International
+            if location in ("Hyderabad", "Goa", "Bhogapuram"):
                 return _sum_pools(["Domestic", "International"])
             return _sum_pools(["T1 Dep", "T1 Arr", "T2 Dep", "T2 Arr",
                                 "T3 Dom Dep", "T3 Dom Arr", "T3 Int Dep", "T3 Int Arr"])
@@ -2764,6 +3182,19 @@ def get_available_dates() -> list[dt.date]:
     try:
         rows = session.execute(
             select(RevenueMaster.date).distinct().order_by(RevenueMaster.date)
+        ).all()
+        return [r[0] for r in rows]
+    finally:
+        session.close()
+
+
+def get_available_dates_for_segment(segment: str) -> list[dt.date]:
+    """Distinct revenue_master dates that have rows for `segment`, ascending."""
+    session = SessionLocal()
+    try:
+        rows = session.execute(
+            select(RevenueMaster.date).where(RevenueMaster.segment == segment)
+            .distinct().order_by(RevenueMaster.date)
         ).all()
         return [r[0] for r in rows]
     finally:

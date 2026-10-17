@@ -18,7 +18,7 @@ import datetime as dt
 
 import streamlit as st
 
-from . import database
+from . import cached_db, database
 from . import date_picker
 from . import revenue_analysis as ra
 # FIX (Bug 5): previously this module accessed the private function
@@ -32,7 +32,12 @@ MONTH_NAMES = [
 ]
 
 
-def render_comparison_selector(anchor_date: dt.date, key_prefix: str) -> dict:
+def render_comparison_selector(
+    anchor_date: dt.date,
+    key_prefix: str,
+    type_container=None,
+    compact: bool = False,
+) -> dict:
     """
     Render the comparison-type controls and return the resolved ranges dict
     from revenue_analysis.resolve_comparison_ranges(), with an extra
@@ -42,9 +47,21 @@ def render_comparison_selector(anchor_date: dt.date, key_prefix: str) -> dict:
     `key_prefix` must be unique per page (Streamlit widget keys can't
     collide across pages that might render this at the same time within
     one session) — e.g. "exec_summary", "rev_comparison", "insights".
+
+    `type_container` (optional) is a column/container to draw the
+    Comparison Type box in, so it can sit on the same row as the report
+    date. `compact=True` uses shorter labels and horizontal radios for the
+    dashboard filter bar. Neither changes the returned ranges.
     """
-    comparison_type = st.selectbox(
-        "🔍 Comparison Type",
+    import contextlib
+    with (type_container if type_container is not None else contextlib.nullcontext()):
+        comparison_type = _comparison_type_box(key_prefix, compact)
+    return _render_compare_controls(anchor_date, key_prefix, comparison_type, compact)
+
+
+def _comparison_type_box(key_prefix: str, compact: bool) -> str:
+    return st.selectbox(
+        "Compare by" if compact else "🔍 Comparison Type",
         options=ra.COMPARISON_TYPES,
         index=0,
         key=f"{key_prefix}_comparison_type",
@@ -55,12 +72,16 @@ def render_comparison_selector(anchor_date: dt.date, key_prefix: str) -> dict:
         ),
     )
 
+
+def _render_compare_controls(
+    anchor_date: dt.date, key_prefix: str, comparison_type: str, compact: bool
+) -> dict:
     mode = "Full Period"
     compare_year = None
     compare_month = None
     compare_week_start = None
     compare_date = None
-    available_dates = database.get_available_dates()
+    available_dates = cached_db.get_available_dates()
 
     if comparison_type == "Day-wise":
         # All available dates are offered — no restriction based on anchor_date.
@@ -77,8 +98,10 @@ def render_comparison_selector(anchor_date: dt.date, key_prefix: str) -> dict:
             key_prefix=f"{key_prefix}_day_date",
             label="Compare Date",
             default_date=default_compare_date,
+            compact=compact,
         )
-        st.caption("Any date in the database can be selected — both date selectors are fully independent.")
+        if not compact:
+            st.caption("Any date in the database can be selected — both date selectors are fully independent.")
 
     elif comparison_type == "Week-wise":
         mode_col, week_col = st.columns(2)
@@ -87,6 +110,7 @@ def render_comparison_selector(anchor_date: dt.date, key_prefix: str) -> dict:
                 "Compare basis",
                 options=ra.COMPARISON_MODES,
                 index=0,
+                horizontal=compact,
                 key=f"{key_prefix}_week_mode",
                 help=(
                     "Full Period compares the two whole calendar weeks "
@@ -95,7 +119,7 @@ def render_comparison_selector(anchor_date: dt.date, key_prefix: str) -> dict:
                     "on both sides."
                 ),
             )
-        available_week_starts = database.get_available_week_starts()
+        available_week_starts = cached_db.get_available_week_starts()
         cur_monday, _ = ra.week_range(anchor_date)
         default_compare_monday = cur_monday - dt.timedelta(days=7)
         # All weeks available — including the current week (e.g. compare this week vs last week vs any other)
@@ -121,9 +145,10 @@ def render_comparison_selector(anchor_date: dt.date, key_prefix: str) -> dict:
                 "Compare basis",
                 options=ra.COMPARISON_MODES,
                 index=0,
+                horizontal=compact,
                 key=f"{key_prefix}_month_mode",
             )
-        available_year_months = database.get_available_year_months()
+        available_year_months = cached_db.get_available_year_months()
         available_years_for_month = sorted({y for y, m in available_year_months}, reverse=True)
         # FIX (Bug 5): use the directly-imported function rather than
         # accessing a private symbol on a different module.
@@ -155,16 +180,26 @@ def render_comparison_selector(anchor_date: dt.date, key_prefix: str) -> dict:
                 "Compare basis",
                 options=ra.COMPARISON_MODES,
                 index=0,
+                horizontal=compact,
                 key=f"{key_prefix}_year_mode",
             )
-        available_years = database.get_available_years()
-        # All years available — including the current year
-        other_years = available_years or [anchor_date.year - 1]
+        # Financial years (April–March) that have data, named by start year
+        cur_fy = ra.fy_start_year(anchor_date)
+        available_fys = {y if m >= 4 else y - 1
+                         for y, m in (cached_db.get_available_year_months() or [])}
+        other_years = sorted(available_fys or {cur_fy - 1}, reverse=True)
+        # Default to the FY before the report's FY (comparing a year with
+        # itself shows nothing useful); the current FY stays selectable.
+        _others = [y for y in other_years if y != cur_fy]
+        _default = (cur_fy - 1 if cur_fy - 1 in other_years
+                    else min(_others, key=lambda y: abs(y - cur_fy)) if _others
+                    else other_years[0])
         with year_col:
             compare_year = st.selectbox(
-                "Compare Year",
-                options=sorted(other_years, reverse=True),
-                index=0,
+                "Compare Financial Year",
+                options=other_years,
+                index=other_years.index(_default),
+                format_func=ra.fy_label,
                 key=f"{key_prefix}_year_year",
             )
 

@@ -18,9 +18,6 @@ venv/
 *.log
 logs/
 
-# Test files — keep out of production deployments
-test_*.py
-tests/
 
 # OS files
 .DS_Store
@@ -29,3 +26,8 @@ Thumbs.db
 
 # Database backups
 backups/
+
+# Server-only settings (secrets / per-server paths) - never commit
+alert_webhook.txt
+backup_offsite.txt
+deploy_source.txt

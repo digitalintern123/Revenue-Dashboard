@@ -17,6 +17,7 @@ from typing import Optional
 import pandas as pd
 
 from . import aop_parser, database, excel_parser, pdf_parser, traffic_parser, universal_parser
+from . import import_report as _import_report
 
 REQUIRED_COLUMNS = ["date", "segment", "outlet", "location", "pax", "revenue"]
 
@@ -35,7 +36,26 @@ class ProcessResult:
     total_pax: float = 0.0
     inserted: int = 0
     skipped: int = 0
+    replaced: int = 0       # stored rows deleted first (upload with "Replace")
+    # Which layout read the file — shown by the upload "Analyse" panel
+    # (modules/format_registry.py). confidence is 0..1, None = not scored.
+    layout: str = ""
+    confidence: Optional[float] = None
+    source_sheet: Optional[str] = None
+    header_row_idx: Optional[int] = None    # 0-based row of the column headers
+    layout_details: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    # Rows not imported (or imported without a figure), with source row and
+    # reason — see modules/import_report.py. Empty when everything imported.
+    skipped_rows: Optional[pd.DataFrame] = None
+
+
+# Layout names shown on the upload "Analyse" panel
+LAYOUT_LONG = "Revenue workbook — long table (Date, Location, Business, Outlet, PAX, Revenue)"
+LAYOUT_STACKED = "Revenue — stacked daily blocks"
+LAYOUT_PIVOT = "Revenue — wide pivot (PAX / Revenue pairs per outlet)"
+LAYOUT_GENERIC = "Revenue — simple table (columns matched by name)"
+LAYOUT_UNIVERSAL = "Auto-detected table"
 
 
 def detect_file_type(file_name: str) -> str:
@@ -202,9 +222,13 @@ def process_uploaded_file(
     file_name: str,
     save_to_db: bool = True,
     excel_sheet_name: Optional[str] = None,
+    replace: bool = False,
 ) -> ProcessResult:
     """
     Main entry point for processing a single uploaded file (PDF or Excel).
+
+    replace=True: stored revenue for every (location, date) in the file is
+    deleted before saving, so the file's figures replace it.
 
     For Excel files, this no longer assumes any particular sheet name or
     requires the caller to say whether the file is "the historical
@@ -235,6 +259,7 @@ def process_uploaded_file(
 
     file_type = detect_file_type(file_name)
     warnings: list[str] = []
+    layout: dict = {}
 
     # ── Early traffic detection ─────────────────────────────────────────────
     # If the file's first row contains columns like DOM_ARR_PAX / INT_ARR_PAX,
@@ -287,6 +312,7 @@ def process_uploaded_file(
     try:
         if file_type == "pdf":
             df = pdf_parser.parse_pdf(file_obj, source_file=file_name)
+            layout = dict(layout="Encalm daily report (PDF)")
             discrepancies = _safe_cross_validate(df, file_obj)
             if discrepancies:
                 warnings.append(
@@ -316,6 +342,8 @@ def process_uploaded_file(
                     df = excel_parser.parse_revenue_dashboard(
                         file_obj, sheet_name=excel_sheet_name, header_row_idx=long_match["header_row_idx"]
                     )
+                    layout = dict(layout=LAYOUT_LONG, source_sheet=excel_sheet_name,
+                                  header_row_idx=long_match["header_row_idx"])
 
                 if df is None:
                     try:
@@ -328,6 +356,7 @@ def process_uploaded_file(
                         if hasattr(file_obj, "seek"):
                             file_obj.seek(0)
                         df = excel_parser.parse_stacked_daily_blocks(file_obj, stacked_match)
+                        layout = dict(layout=LAYOUT_STACKED, source_sheet=excel_sheet_name)
 
                 if df is None:
                     try:
@@ -343,13 +372,15 @@ def process_uploaded_file(
                         if hasattr(file_obj, "seek"):
                             file_obj.seek(0)
                         df = excel_parser.parse_wide_pivot_sheet(file_obj, matching_pivot)
+                        layout = dict(layout=LAYOUT_PIVOT, source_sheet=excel_sheet_name)
 
                 if df is None:
                     if hasattr(file_obj, "seek"):
                         file_obj.seek(0)
                     df = excel_parser.parse_generic_excel(file_obj, sheet_name=excel_sheet_name)
+                    layout = dict(layout=LAYOUT_GENERIC, source_sheet=excel_sheet_name)
             else:
-                df, detected_description = _parse_excel_with_detection(file_obj)
+                df, detected_description, layout = _parse_excel_with_detection(file_obj)
                 if detected_description:
                     warnings.append(f"Detected and used {detected_description} for revenue data.")
         else:
@@ -376,12 +407,18 @@ def process_uploaded_file(
             success=False, file_name=file_name, stage="validation",
             message=f"File '{file_name}' has {len(df):,} rows — max allowed is {_MAX_ROWS:,}. Split into smaller files."
         )
-    df = _validate_and_clean(df)
+    df, skipped_report = _validate_and_clean_with_report(df)
+    if not skipped_report.empty:
+        warnings.append(
+            f"{len(skipped_report):,} row(s) were not imported or imported incompletely — "
+            "see the 'Rows not imported' table for the Excel row and reason."
+        )
     if df.empty:
         return ProcessResult(
             success=False,
             file_name=file_name,
             stage="validating",
+            skipped_rows=skipped_report,
             message=(
                 f"'{file_name}' was read, but contained no usable revenue rows after "
                 f"validation — check that it has the expected columns (Date, Segment/"
@@ -389,7 +426,23 @@ def process_uploaded_file(
             ),
         )
 
-    report_date = df["date"].iloc[0] if "date" in df.columns and not df.empty else None
+    return _finish_revenue(df, file_name, warnings, skipped_report,
+                           save_to_db=save_to_db, replace=replace, layout=layout)
+
+
+def _finish_revenue(
+    df: pd.DataFrame,
+    file_name: str,
+    warnings: list[str],
+    skipped_report: pd.DataFrame,
+    save_to_db: bool,
+    replace: bool,
+    layout: dict,
+) -> ProcessResult:
+    """Validated revenue rows -> totals, embedded AOP, save (if asked) and
+    the ProcessResult. Shared by process_uploaded_file and save_analysed."""
+    # Latest date in the file (a multi-day workbook's first row can be any day).
+    report_date = max(df["date"]) if "date" in df.columns and not df.empty else None
     total_revenue = float(pd.to_numeric(df["revenue"], errors="coerce").sum())
     total_pax = float(pd.to_numeric(df["pax"], errors="coerce").sum())
 
@@ -439,15 +492,16 @@ def process_uploaded_file(
                 f"(revenue data was still imported normally)."
             )
 
-    inserted, skipped = 0, 0
+    inserted, skipped, replaced = 0, 0, 0
     if save_to_db:
         try:
             # Use batched save for large files (>5000 rows) to avoid
             # Neon PostgreSQL compute timeouts on free tier.
             if len(df) > 5000:
-                result = database.save_dataframe_batched_v2(df, source_file=file_name)
+                result = database.save_dataframe_batched_v2(df, source_file=file_name,
+                                                            replace=replace)
             else:
-                result = database.save_dataframe(df, source_file=file_name)
+                result = database.save_dataframe(df, source_file=file_name, replace=replace)
         except Exception as exc:
             return ProcessResult(
                 success=False,
@@ -459,9 +513,13 @@ def process_uploaded_file(
                 ),
             )
         inserted, skipped = result["inserted"], result["skipped"]
+        replaced = result.get("replaced", 0)
 
     message_parts = [f"Parsed {len(df):,} row(s) from '{file_name}'."]
     if save_to_db:
+        if replaced:
+            message_parts.append(f"{replaced:,} earlier row(s) for these dates and "
+                                 f"locations replaced.")
         message_parts.append(f"{inserted:,} new row(s) saved.")
         if skipped:
             message_parts.append(f"{skipped:,} duplicate row(s) skipped (already in database).")
@@ -477,8 +535,52 @@ def process_uploaded_file(
         total_pax=total_pax,
         inserted=inserted,
         skipped=skipped,
+        replaced=replaced,
         warnings=warnings,
+        layout=layout.get("layout", ""),
+        confidence=layout.get("confidence"),
+        source_sheet=layout.get("source_sheet"),
+        header_row_idx=layout.get("header_row_idx"),
+        layout_details=layout.get("details", []),
+        skipped_rows=skipped_report,
     )
+
+
+def process_mapped_rows(df: pd.DataFrame, file_name: str, layout_label: str,
+                        confidence: Optional[float], details: Optional[list] = None,
+                        source_sheet: Optional[str] = None) -> ProcessResult:
+    """Rows built from a user-confirmed or saved column mapping
+    (modules/layout_learning.py) -> the same validation as every other
+    revenue file, not saved (save with save_analysed)."""
+    warnings: list[str] = []
+    df, skipped_report = _validate_and_clean_with_report(df)
+    if not skipped_report.empty:
+        warnings.append(
+            f"{len(skipped_report):,} row(s) were not imported or imported incompletely — "
+            "see the 'Rows not imported' table for the Excel row and reason.")
+    if df.empty:
+        return ProcessResult(success=False, file_name=file_name, stage="validating",
+                             skipped_rows=skipped_report, layout=layout_label,
+                             message=(f"With this column mapping no usable revenue rows remain "
+                                      f"in '{file_name}' — check the roles and the header row."))
+    return _finish_revenue(df, file_name, warnings, skipped_report, save_to_db=False,
+                           replace=False,
+                           layout=dict(layout=layout_label, confidence=confidence,
+                                       source_sheet=source_sheet, details=details or []))
+
+
+def save_analysed(result: ProcessResult, replace: bool = False) -> ProcessResult:
+    """Save a revenue file that was already parsed with save_to_db=False
+    (the upload "Analyse" step), without reading the file again."""
+    if not result.success or result.df is None or result.df.empty:
+        return result
+    layout = dict(layout=result.layout, confidence=result.confidence,
+                  source_sheet=result.source_sheet, header_row_idx=result.header_row_idx,
+                  details=list(result.layout_details))
+    warnings = [w for w in result.warnings]
+    skipped = result.skipped_rows if result.skipped_rows is not None else pd.DataFrame()
+    return _finish_revenue(result.df.copy(), result.file_name, warnings, skipped,
+                           save_to_db=True, replace=replace, layout=layout)
 
 
 def process_uploaded_file_auto(
@@ -767,7 +869,7 @@ def _process_with_ingestion_layer(
 
     # Pass through the same validate-and-clean step every other parser uses.
     try:
-        df = _validate_and_clean(result.df)
+        df, skipped_report = _validate_and_clean_with_report(result.df)
     except ValueError as exc:
         return ProcessResult(
             success=False, file_name=file_name, stage="validating",
@@ -783,7 +885,7 @@ def _process_with_ingestion_layer(
             ),
         )
 
-    report_date  = df["date"].iloc[0] if "date" in df.columns and not df.empty else None
+    report_date  = max(df["date"]) if "date" in df.columns and not df.empty else None
     total_revenue = float(pd.to_numeric(df["revenue"], errors="coerce").sum())
     total_pax     = float(pd.to_numeric(df["pax"],     errors="coerce").sum())
 
@@ -823,6 +925,7 @@ def _process_with_ingestion_layer(
         inserted=inserted,
         skipped=skipped,
         warnings=ui_warnings,
+        skipped_rows=skipped_report,
     )
 
 
@@ -904,7 +1007,7 @@ def _process_with_universal(
     warnings.extend(parsed.warnings)
 
     try:
-        df = _validate_and_clean(parsed.df)
+        df, skipped_report = _validate_and_clean_with_report(parsed.df)
     except ValueError as exc:
         return ProcessResult(
             success=False, file_name=file_name, stage="validating", message=str(exc)
@@ -920,7 +1023,7 @@ def _process_with_universal(
             ),
         )
 
-    report_date = df["date"].iloc[0] if not df.empty else None
+    report_date = max(df["date"]) if not df.empty else None
     total_revenue = float(pd.to_numeric(df["revenue"], errors="coerce").sum())
     total_pax = float(pd.to_numeric(df["pax"], errors="coerce").sum())
 
@@ -961,10 +1064,14 @@ def _process_with_universal(
         inserted=inserted,
         skipped=skipped,
         warnings=warnings,
+        skipped_rows=skipped_report,
+        layout=f"{LAYOUT_UNIVERSAL} ({parsed.source_description})",
+        confidence=parsed.confidence,
+        layout_details=parsed.report_lines(),
     )
 
 
-def _parse_excel_with_detection(file_obj) -> tuple[pd.DataFrame, Optional[str]]:
+def _parse_excel_with_detection(file_obj) -> tuple[pd.DataFrame, Optional[str], dict]:
     """
     Try, in order:
       1. A long-format sheet anywhere in the workbook (any sheet name).
@@ -982,7 +1089,9 @@ def _parse_excel_with_detection(file_obj) -> tuple[pd.DataFrame, Optional[str]]:
          resort for a small ad-hoc spreadsheet without a perfectly clean
          header row.
 
-    Returns (dataframe, description_of_what_was_detected_or_None).
+    Returns (dataframe, description_of_what_was_detected_or_None, layout)
+    where layout = {"layout", "source_sheet", "header_row_idx"} for the
+    upload "Analyse" panel.
     """
     try:
         long_match = excel_parser.detect_long_format_sheet(file_obj)
@@ -996,7 +1105,9 @@ def _parse_excel_with_detection(file_obj) -> tuple[pd.DataFrame, Optional[str]]:
         df = excel_parser.parse_revenue_dashboard(
             file_obj, sheet_name=long_match["sheet_name"], header_row_idx=long_match["header_row_idx"]
         )
-        return df, f"long-format sheet '{long_match['sheet_name']}'"
+        return df, f"long-format sheet '{long_match['sheet_name']}'", dict(
+            layout=LAYOUT_LONG, source_sheet=long_match["sheet_name"],
+            header_row_idx=long_match["header_row_idx"])
 
     if hasattr(file_obj, "seek"):
         file_obj.seek(0)
@@ -1009,7 +1120,8 @@ def _parse_excel_with_detection(file_obj) -> tuple[pd.DataFrame, Optional[str]]:
         if hasattr(file_obj, "seek"):
             file_obj.seek(0)
         df = excel_parser.parse_stacked_daily_blocks(file_obj, stacked_match)
-        return df, f"stacked daily blocks sheet '{stacked_match['sheet_name']}'"
+        return df, f"stacked daily blocks sheet '{stacked_match['sheet_name']}'", dict(
+            layout=LAYOUT_STACKED, source_sheet=stacked_match["sheet_name"])
 
     if hasattr(file_obj, "seek"):
         file_obj.seek(0)
@@ -1047,12 +1159,13 @@ def _parse_excel_with_detection(file_obj) -> tuple[pd.DataFrame, Optional[str]]:
                     f" ({dropped_count:,} row(s) that appeared in more than one sheet for the "
                     "same date/outlet were de-duplicated)"
                 )
-            return combined, description
+            return combined, description, dict(
+                layout=LAYOUT_PIVOT, source_sheet=", ".join(sheet_names_used))
 
     if hasattr(file_obj, "seek"):
         file_obj.seek(0)
     df = excel_parser.parse_generic_excel(file_obj)
-    return df, None
+    return df, None, dict(layout=LAYOUT_GENERIC)
 
 
 def _safe_cross_validate(df: pd.DataFrame, file_obj) -> Optional[dict]:
@@ -1092,20 +1205,38 @@ def _title_case_preserving_acronyms(value) -> str:
 
 
 def _validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
+    """Cleanup without the report — kept for callers that only need rows."""
+    return _validate_and_clean_with_report(df)[0]
+
+
+def _validate_and_clean_with_report(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Standardize column names/types and drop unusable rows. This is the
     common cleanup step run regardless of which parser produced the
     DataFrame, so the database layer always receives a consistent shape.
+
+    Returns (clean rows, report of rows not imported). The report includes
+    rows the parser already dropped (df.attrs["skipped_rows"]) plus the
+    ones dropped here: invalid dates, dates outside
+    import_report.MIN_VALID_DATE .. today + MAX_FUTURE_DAYS (corrupted
+    cells such as year 3601 are rejected instead of imported), and lines
+    with neither PAX nor revenue.
     """
+    parser_report = None
+    if df is not None:
+        parser_report = getattr(df, "attrs", {}).get("skipped_rows")
     if df is None or df.empty:
-        return pd.DataFrame(columns=REQUIRED_COLUMNS)
+        return pd.DataFrame(columns=REQUIRED_COLUMNS), _import_report.combine([parser_report])
 
     df = df.copy()
-    df.columns = [str(c).strip().lower() for c in df.columns]
+    df.columns = [str(c).strip() if str(c) in _import_report.HELPER_COLS else str(c).strip().lower()
+                  for c in df.columns]
 
     missing = [c for c in REQUIRED_COLUMNS if c not in df.columns]
     if missing:
         raise ValueError(f"Parsed data is missing required column(s): {missing}")
+
+    raw_view = df.copy()   # figures as the parser produced them, for the report
 
     df["segment"] = df["segment"].astype(str).str.strip().apply(_title_case_preserving_acronyms)
     df["outlet"] = df["outlet"].astype(str).str.strip()
@@ -1122,12 +1253,32 @@ def _validate_and_clean(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df["traffic"] = pd.NA
 
+    report = [parser_report]
+    if _import_report.DATE_RAW_COL not in df.columns:
+        df[_import_report.DATE_RAW_COL] = df["date"]
+        raw_view[_import_report.DATE_RAW_COL] = df["date"]
     df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.date
-    df = df.dropna(subset=["date"])
+
+    bad_date = df["date"].isna()
+    report.append(_import_report.frame(raw_view[bad_date], "Date is not a valid date"))
+    df = df[~bad_date]
+
+    lo, hi = _import_report.MIN_VALID_DATE, _import_report.max_valid_date()
+    out_of_range = df["date"].map(lambda d: d < lo or d > hi)
+    report.append(_import_report.frame(
+        raw_view.loc[out_of_range[out_of_range].index],
+        f"Date outside the accepted range ({lo:%d %b %Y} to {hi:%d %b %Y})"))
+    df = df[~out_of_range]
 
     # A row with neither PAX nor Revenue carries no information — drop it.
-    df = df[~(df["pax"].isna() & df["revenue"].isna())]
+    no_figures = df["pax"].isna() & df["revenue"].isna()
+    report.append(_import_report.frame(
+        raw_view.loc[no_figures[no_figures].index], "No PAX and no revenue (empty line)"))
+    df = df[~no_figures]
 
-    df = df.drop_duplicates(subset=["date", "segment", "outlet", "location"], keep="last")
+    df = df.drop(columns=[c for c in _import_report.HELPER_COLS if c in df.columns])
+    # Same date/segment/outlet/location on more than one line = month-end
+    # adjustment lines; add them together (see database.combine_duplicate_revenue_rows).
+    df = database.combine_duplicate_revenue_rows(df, ["date", "segment", "outlet", "location"])
     df = df.reset_index(drop=True)
-    return df
+    return df, _import_report.combine(report)

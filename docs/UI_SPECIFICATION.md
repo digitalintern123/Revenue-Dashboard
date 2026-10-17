@@ -1,268 +1,125 @@
-# UI_SPECIFICATION.md
-# Encalm Revenue Analytics — UI Specification
+# UI Specification
+
+Current layout of every page and the conventions shared between them.
+Staff-facing explanations are in [USER_GUIDE.md](USER_GUIDE.md).
 
 ---
 
-## Global UI Conventions
+## 1. Global
 
-- **Layout:** `st.set_page_config(layout="wide")` on all pages
-- **Sidebar:** Username badge + Logout button (via `render_user_badge()`)
-- **Number format:** Indian grouping (₹49,35,256 not ₹4,935,256)
-- **Percentage format:** `+8.70%` (always 2 decimal places, leading sign)
-- **Empty/missing values:** `"—"` (em dash U+2014)
-- **Trend indicators:** `📈` (growth) / `📉` (decline) / `➡️` (stable) / `🆕` (new entrant)
-- **Colors:** Growth = `#0B7A57` (dark green) / Decline = `#B91C1C` (dark red) / Neutral = `#64748B`
+### Shell (`Home.py`)
+- `st.set_page_config(layout="wide")`, favicon = Encalm mark.
+- `ui.inject_css()` (brand CSS) and `st.logo(...)` run on every rerun.
+- Menu: `st.navigation`, sections **Data** (Upload Data, Previous Uploads) and
+  **Dashboards** (EHPL, Encalm Eats, Sky Plates), Lucide icons via
+  `ui.sidebar_nav_icons({url_path: icon})`.
+- **Signed out:** `ui.hide_sidebar()` and `position="hidden"` — only the
+  sign-in form (logo, username, password) is shown.
+- Signed in: sidebar footer "Signed in as …" and **Log out**
+  (`auth.render_user_badge`).
+- Every page starts with `require_login()`, `bootstrap_session()`,
+  `render_user_badge()`, then `ui.page_header(title, subtitle, icon=…)`.
 
----
+### Branding (`modules/ui.py`, `assets/`)
 
-## Home.py — Upload & Database Management
+| Token | Value | Use |
+|---|---|---|
+| navy | `#142248` | sidebar, headings, primary buttons, TOTAL rows |
+| gold | `#CBA578` | accents, underlines, bars (never body text) |
+| gold_text | `#8C6A3F` | gold-coloured text on white |
+| gold_tint | `#F3ECE1` | subtotal rows, highlights |
+| growth / decline / neutral | `#0B7A57` / `#B91C1C` / `#5F6677` | % changes |
+| surface / border | `#F6F3EE` / `#E7E1D7` | inputs, cards |
 
-### Sections
-1. **Upload & Analyze** — `st.file_uploader()` (multiple files, all formats)
-   - Per-file: sheet selector for Excel (`st.selectbox`)
-   - Per-file result: rows inserted/skipped, total revenue, spinner during processing
-   - Rate limit: 20 Revenue uploads/hour per user
+Headings use **Montserrat** (Google Fonts); body uses the system sans-serif.
+Icons are [Lucide](https://lucide.dev) SVGs in `assets/icons/`, drawn as CSS
+masks so they take the text colour: `ui.icon_html(name)`,
+`ui.tab_icons(key, [names])`, `ui.sidebar_nav_icons`. Streamlit's own
+`icon=` parameter is not used for these.
 
-2. **Historical Excel Import** — For bulk historical imports
-   - Format auto-detection (long vs wide pivot)
-   - Two-step: parse first → preview → save with progress bar
-
-3. **AOP Target Import** — AOP workbooks
-   - Lists candidate sheets per file
-   - User picks format (outlet_monthly / daily_outlet_pivot / daily_pivot)
-
-4. **Traffic Data Import** — Airport traffic files
-   - Auto-parses all known formats
-
-5. **Database Management**
-   - KPI cards: Total rows, date range, distinct dates
-   - **Clear Session** button
-   - **Reset Database** button — admin only (username ends in `_admin` or in `[auth.admins]`)
-
----
-
-## Page 1 — Previous Uploads
-
-### Sections
-1. **Upload History table** — `st.dataframe()` with columns: Type, File, Date, Rows, Total Value, PAX, Uploaded At
-2. **Available Dates** — one row per date with Revenue, PAX, Outlet Count
-3. **Set Active Date** — clicking a date sets it as active for all other pages
+### Helpers
+`ui.section(title)` (gold-barred section heading), `ui.summary_line(current,
+compare, location)` ("Showing … vs … · location"), `ui.field_label`.
 
 ---
 
-## Page 2 — Executive Summary
+## 2. Upload Data (`views/Uploads.py`, `/Uploads`, default page)
 
-### Date Selector
-- `render_date_dropdown()` — Year/Month/Day dropdowns
-- `render_comparison_selector()` — Day/Week/Month/Year-wise with Full Period / To-Date mode
+Tabs (`key="upload_tabs"`): **Daily Revenue** · **AOP Targets** · **Traffic**
+· **Database**. (The separate *Historical Import* tab was removed — Daily
+Revenue takes full workbooks too; above 5,000 rows it saves in batches.)
 
-### Sections
-1. **KPI Cards** (4 columns):
-   - Total Revenue (current period)
-   - Compare Revenue
-   - PAX (current period)
-   - Revenue Change % with delta arrow
+- Daily Revenue tab: **Replace existing revenue for the dates and locations in
+  this file** (off by default; `process_uploaded_file(replace=True)`); the
+  result shows *Replaced: n earlier row(s)*.
+- File uploader → sheet selector per workbook (auto-detect option) →
+  **🔍 Analyse** → analysis panel (`modules/analyse_panel.py`: confidence,
+  sheet-by-sheet identification from `format_registry`, checks from
+  `upload_checks`, preview) → **💾 Save** / **✖️ Cancel**. The same flow on
+  every upload point, including Encalm Eats → Upload DSR. Analyses are cached
+  (`st.cache_data`, 4 entries, 30 min) so Save reuses them; session state
+  holds only file names, sheets and confirmed column mappings.
+- Revenue / Traffic: **🧩 Teach the app this layout** (`modules/mapping_editor.py`)
+  when the file is not read with confidence: sheet, header row, a
+  `st.data_editor` of column roles, values for missing fields, *Read with
+  this mapping*, then *Remember this layout* on Save.
+- Database tab: **Saved layouts** table; admins (`[auth.admins]`) can delete.
+- Revenue saving is rate-limited (on Save).
+- Result panel (`upload_status.render_result_from_process_result`): success /
+  failure, rows saved, warnings, and the **rows not imported** expander
+  (summary by reason, table with Excel row, CSV download).
+- AOP tab: **Replace existing AOP for the months in this file** (on by
+  default); after import, expanders for the Sky Plates / Encalm Eats outlet
+  mapping (with *Result*) and rows not imported as EHPL AOP.
+- Traffic tab: **Replace existing traffic for the dates and airports in this
+  file** (on by default; `save_traffic_dataframe(replace=True)`); after import,
+  "Replaced: n earlier rows" and a warning per sheet that produced no rows
+  (`traffic_parser._skipped_sheets`).
+- Every successful write calls `clear_data_cache()` then `st.rerun()`.
 
-2. **AOP Card** (when AOP data exists):
-   - AOP Target
-   - Variance %
-   - Variance Amount
+## 3. Previous Uploads (`views/Previous_Uploads.py`)
 
-3. **Segment Breakdown** — Revenue + PAX per segment (EHPL / Sky Plates / Encalm Eats)
+Tabs: **Upload History** · **Available Dates** · **Preview Data** (Single Date
+/ Date Range, location filter) · **Load Date** (sets the active date used by
+all dashboards).
 
-4. **Location Breakdown** — Revenue + PAX per location (Delhi / Hyderabad / Goa)
+## 4. Dashboards — shared parts (`modules/business_dashboard.py`)
 
-5. **Charts** — Revenue by segment (bar), Revenue by location (bar), PAX trend (line)
+1. **Filter bar** (bordered container): Report Date (year / month / day
+   dropdowns), Compare by (+ Full Period / To-Date and the compare date, week,
+   month or year), Location (All Locations + locations with data).
+2. **Summary line** — what is being compared.
+3. **Overview** — KPI cards: Revenue, PAX, AOP Target (+ variance), Traffic,
+   PEN %, SPP (EHPL); Revenue, PAX, AOP for Encalm Eats / Sky Plates.
+4. **Charts** (`modules/charts.py`): revenue by location/outlet (current vs
+   compare bars) and a 30-day trend line.
+5. **Tables** — one per location (All Locations) or one for the chosen location.
 
----
+### Table conventions
+- First row **TOTAL** (navy, white text); section totals (TOTAL LOUNGES …)
+  bold on a gold tint, followed by their outlets sorted by current revenue.
+- Missing values show **—**; % changes green for growth, red for decline, grey for zero or "—" (`modules/table_style.py`).
+- Columns: PAX (current, compare), PAX Chg %, Revenue (current, compare),
+  Rev Chg %, AOP, Variance; EHPL adds Traffic, PEN %, SPP and their changes.
+- If both periods have the same label the compare columns get "(compare)".
 
-## Page 3 — Revenue Comparison
+## 5. EHPL (`views/EHPL.py` → `render_ehpl_page`)
 
-### Date Controls
-- `render_comparison_selector()` — comparison type + mode
+Per location: the outlet table (`ehpl_layout.render_ehpl_location`, sections
+LOUNGES, SPA, NAP & SHOWER, ATITHYA SERVICES, ENWRAP, PORTER, BAR, OTHERS)
+then **Terminal-wise Performance**. Row rules: [DATA_MAPPINGS.md](DATA_MAPPINGS.md) §2, §4.
 
-### Five Tabs
+## 6. Encalm Eats (`views/Encalm_Eats.py`)
 
-#### Tab 1 — Detailed Comparison
-- Outlet-level table: `compare_periods()` output
-- Columns: Performance, Rev (current), Rev (compare), Rev YOY%, AOP Target, AOP Var%, PAX (current), PAX (compare), PAX YOY%, Traffic, PEN%, SPP
-- Color coding: green/red on % columns
-- Caption: "Traffic is each outlet's own terminal traffic pool. PEN % = outlet PAX ÷ that outlet's terminal traffic."
+Tabs (`key="eats_tabs"`): **Analytics** · **Upload DSR**.
+- Analytics: filter bar over DSR dates ∪ revenue-upload dates; caption says
+  whether the figures come from the DSR, the revenue upload, or both; outlet
+  table per location with AOP, **Other planned outlets – no sales (n)** row
+  and an expander listing those outlets.
+- Upload DSR: uploader (.xlsx/.xls, sheets named DD-MM-YYYY) → **Parse &
+  Import DSR** → metrics (sheets, records, covers, revenue), period /
+  locations / outlets, warnings, preview, save result.
 
-#### Tab 2 — Segment Summary
-- Revenue/PAX comparison by segment
+## 7. Sky Plates (`views/Sky_Plates.py` → `render_subsidiary_page`)
 
-#### Tab 3 — Location → Services
-- Revenue/PAX by (location, segment)
-
-#### Tab 4 — Penetration % / SPP
-- Location-level Traffic/PEN%/SPP comparison table
-- Uses `join_revenue_with_traffic()` (location-level, NOT outlet-specific)
-
-#### Tab 5 — Domestic vs International
-- Revenue split by Dom/Int/Ancillary classification
-- Donut chart
-- Classification via `_OUTLET_MAP` dict (lowercase outlet name → category)
-- Caption: "Add new outlets to `_OUTLET_MAP` in this file to adjust classification."
-
-### Multi-Period Snapshot
-- Below all tabs
-- Week/Month/Year comparisons side by side
-
----
-
-## Page 4 — Traffic & Terminal Analysis
-
-### Date Controls
-- `render_comparison_selector()` + location selector
-
-### Sections
-1. **Penetration % / SPP by Location** — KPI table + metric cards
-   - Uses `join_revenue_with_traffic()` (location-level)
-
-2. **Driver Narrative** — Plain-English attribution
-   - "Revenue increased despite traffic decline due to higher SPP"
-
-3. **Terminal-wise Breakdown** (location-specific)
-   - Revenue/PAX/Traffic/PEN%/SPP per terminal
-   - Composite terminals (Porter Pool, All Dep, All, T3 Total, T3 Arr) show revenue/PAX but Traffic = `—`
-   - Caption explaining why composite terminals show `—`
-   - Friendly labels for composite terminals: `"Porter Pool"` → `"Porter Pool (T1+T2+T3 Dep+Arr)"`
-
-4. **Unmapped Outlets expander** — shows any outlets without a terminal mapping
-
-5. **Domestic vs International Traffic split** — Dom/Int table + pie charts (Delhi only)
-
----
-
-## Page 5 — Outlet Performance
-
-### Date Controls
-- `render_comparison_selector()`
-
-### Sections
-1. **Top 10 by Revenue** — Horizontal bar chart
-   - Outlet labels include location: `"Outlet Name (Delhi)"`
-
-2. **Bottom 10 by Revenue** — Same format
-
-3. **Change by Outlet** — Diverging bar chart
-   - Green = growth, red = decline
-
-4. **Revenue per PAX table** — Outlet-level Rev/PAX for current period
-
----
-
-## Page 6 — Business Insights
-
-### Date Controls
-- `render_comparison_selector()`
-
-### Sections
-1. **Management Summary** (button-triggered)
-   - `insights.generate_summary()` — rule-based narrative
-   - Cached in `st.session_state`; invalidated when dates change
-   - Button label: "Generate Insights" / "Regenerate Insights"
-
-2. **Volume vs Spend Driver Table**
-   - Per-outlet: Revenue Δ%, PAX Δ%, Rev/PAX Δ%, Traffic, PEN%, SPP, AOP, classification
-   - Classification: `classify_driver()` → "Volume-driven" / "Spend-driven" / "Mixed" / "Flat"
-   - Caption: "Traffic is each outlet's own terminal traffic pool."
-
----
-
-## Page 7 — Service Categories
-
-### Date Controls
-- `render_comparison_selector()`
-
-### Seven Tabs
-| Tab | Filter |
-|-----|--------|
-| Total Airport Services | All segments |
-| EHPL — All | segment == "EHPL" |
-| EHPL — Lounges | segment == "EHPL" AND business_unit == "Lounges" |
-| EHPL — Atithya | segment == "EHPL" AND business_unit == "Atithya" |
-| EHPL — Others | segment == "EHPL" AND business_unit == "Others" |
-| Sky Plates | segment == "Sky Plates" |
-| Encalm Eats | segment == "Encalm Eats" |
-
-### Per Tab Content
-- Revenue KPI card
-- PAX KPI card
-- Revenue Change vs compare period
-- AOP Variance (when data exists)
-- **Penetration %/SPP** — uses `join_revenue_with_traffic()` (location-level)
-- Location bar chart
-
----
-
-## Page 8 — Business Performance (MIS)
-
-### Date Controls
-- `render_date_dropdown()` — current period (Year/Month/Day)
-- `render_comparison_selector()` — comparison type
-
-### Structure
-```
-Three tabs: 🏙️ Delhi | 🏙️ Hyderabad | 🏖️ Goa
-  Each tab:
-    MIS Table (scrollable, full width)
-    [Divider + location label]
-
-Below all tabs:
-    Grand Total — All Locations
-```
-
-### MIS Table Columns
-| Column | Description |
-|--------|-------------|
-| Performance | Outlet display name (indented) or bold subtotal label |
-| Rev (current label) | `format_money(cur_rev)` |
-| Rev (compare label) | `format_money(cmp_rev)` |
-| Rev YOY% | `format_pct(rev_yoy)` with color |
-| AOP Target | `format_money(aop)` (when available) |
-| AOP Var% | `format_pct(aop_var)` with color |
-| PAX (current label) | `format_pax(cur_pax)` |
-| PAX (compare label) | `format_pax(cmp_pax)` |
-| PAX YOY% | `format_pct(pax_yoy)` with color |
-| Traffic (current) | `format_pax(cur_traffic)` or `—` |
-| Traffic (compare) | `format_pax(cmp_traffic)` or `—` |
-| Traffic Δ% | `format_pct(traffic_chg)` with color |
-| PEN % (current) | `f"{pen_cur:.2f}%"` or `—` |
-| PEN % (compare) | `f"{pen_cmp:.2f}%"` or `—` |
-| PEN Δ% | `format_pct(pen_chg)` with color |
-| SPP (current) | `format_spp(spp_cur)` |
-| SPP (compare) | `format_spp(spp_cmp)` |
-| SPP Δ% | `format_pct(spp_chg)` with color |
-
-### Table Styling
-- **Subtotal rows** — bold font weight (CSS applied via `st.dataframe` style)
-- **Grand total (TOTAL EHPL)** — bold + slight background differentiation
-- **Indented outlet rows** — 2-space indent via `"  Outlet Name"` prefix in Performance column
-- **AOP columns** — only shown when AOP data exists for the selected period
-
-### Error Handling
-Each location tab wrapped in `try/except` with:
-- Friendly error: "The comparison table could not be built"
-- Expandable traceback: "🔍 Technical detail (for support)"
-
----
-
-## Navigation Structure
-
-```
-Sidebar (auto-generated by Streamlit MPA):
-  📊 Home
-  📋 Previous Uploads
-  📈 Executive Summary
-  🔄 Revenue Comparison
-  🛫 Traffic and Terminal
-  🏪 Outlet Performance
-  💡 Business Insights
-  🏷️ Service Categories
-  📊 Business Performance
-  ─────────────────────
-  👤 Signed in as <username>
-  🔴 Log out
-```
+One table per location (one *Encalm Sky Plates* row) with AOP.

@@ -1,0 +1,25 @@
+# /etc/systemd/system/encalm.service
+# Runs the Streamlit app in the background; restarts it after crashes and reboots.
+# Replace YOUR-DOMAIN.COM and SYSUSER (the domain's Plesk system user) below.
+[Unit]
+Description=Encalm Revenue Analytics (Streamlit)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=SYSUSER
+Group=psacln
+WorkingDirectory=/var/www/vhosts/YOUR-DOMAIN.COM/encalm-app
+# DATABASE_URL and other settings (never committed to git)
+EnvironmentFile=/var/www/vhosts/YOUR-DOMAIN.COM/private/encalm.env
+# Listen on localhost only — the public goes through Plesk's nginx (HTTPS).
+ExecStart=/var/www/vhosts/YOUR-DOMAIN.COM/encalm-app/venv/bin/streamlit run Home.py \
+    --server.address 127.0.0.1 --server.port 8501 --server.headless true
+Restart=always
+RestartSec=5
+# Uploads can be large; give long imports time to finish on shutdown.
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target

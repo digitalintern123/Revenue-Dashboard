@@ -11,7 +11,7 @@ DSR Structure (per sheet = one day):
     Row 5:  Encalm Eats | <total covers> | <total rev>          <- GRAND TOTAL — skip
     Row 6+: "Outlet Wise Detail" label, then outlet rows
             Some sheets have section-header rows:
-              "Delhi Store's" / "Bhogapuram" — SECTION SUBTOTALS — skip
+              "Delhi Store's" / "Bhogapuram" / "Bhogapuram Store's" — SECTION SUBTOTALS — skip
             Individual outlet rows carry covers + revenue.
 
 Location mapping (inferred from section headers):
@@ -61,6 +61,8 @@ _SECTION_TOTAL_NAMES: frozenset[str] = frozenset({
     "delhi stores",
     "delhi",
     "bhogapuram",
+    "bhogapuram store's",
+    "bhogapuram stores",
     "cafeteria bhogapuram",   # early-sheet Bhogapuram section total
 })
 
@@ -69,7 +71,7 @@ _DELHI_HEADERS: frozenset[str] = frozenset({
     "delhi store's", "delhi stores", "delhi",
 })
 _BHOGAPURAM_HEADERS: frozenset[str] = frozenset({
-    "bhogapuram",
+    "bhogapuram", "bhogapuram store's", "bhogapuram stores",
 })
 
 # Individual outlets that belong to Bhogapuram regardless of section header
@@ -99,22 +101,47 @@ _KNOWN_OUTLETS_LC: frozenset[str] = frozenset({
     "ald",
     "cafeteria admin block - ala carte",
     "cafeteria admin block - sales",
+    # outlets seen in the Sep 2026 DSRs
+    "indisip t3 - mezzanine gate 44",
+    "indisip t3 - int. gate no 32",
+    "chaayos t3 gate no 54",
+    "chaayos t3 gate no. 42a",
+    "haldiram t2 pre check-in",
+    "j&b pour house t2",
+    "j&b pour house",
+    "cafe delhi heights t3 domestic arrival",
+    "vtz inn",
+    "indisip café",
+    "indisip bistro",
+    "totally desi",
+    "svara",
+    "starbucks t2 gate 23",
+    "starbucks t2 gate 23 departure",
+    "mcdonald's- bhogapuram",
+    "starbucks arrival",
+    "starbucks departure",
+    "starbucks international",
 })
+
+
+def _clean(name: str) -> str:
+    """Trim and collapse repeated spaces ("IndiSip T3  - Int." -> "IndiSip T3 - Int.")."""
+    return " ".join(name.split())
 
 
 def _canonicalize(name: str) -> str:
     """Return the canonical display name for an outlet."""
-    lc = name.strip().lower()
-    return _CANONICAL.get(lc, name.strip())
+    clean = _clean(name)
+    return _CANONICAL.get(clean.lower(), clean)
 
 
 def _is_section_total(name: str) -> bool:
-    return name.strip().lower() in _SECTION_TOTAL_NAMES
+    return _clean(name).lower() in _SECTION_TOTAL_NAMES
 
 
 def _location_for_outlet(name: str, current_section: str) -> str:
     """Return 'Bhogapuram' or 'Delhi' based on outlet name and current section."""
-    lc = name.strip().lower()
+    lc = _clean(name).lower()
     if lc in _BHOGAPURAM_OUTLETS:
         return "Bhogapuram"
     return current_section
@@ -240,7 +267,7 @@ def _parse_sheet(ws, sheet_name: str, source_file: str) -> tuple[list[DSRRecord]
         b_raw = row[1]
         if b_raw is None:
             continue
-        b = str(b_raw).strip()
+        b = _clean(str(b_raw))
         b_lc = b.lower()
 
         if "outlet wise detail" in b_lc:

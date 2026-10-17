@@ -15,21 +15,43 @@ from typing import Optional
 
 import streamlit as st
 
-from . import database
+from . import cached_db, database
 
 _ACTIVE_DATE_KEY   = "active_analysis_date"
 _COMPARE_DATE_KEY  = "compare_analysis_date"
 _BOOTSTRAPPED_KEY  = "_db_bootstrapped"
 
 
+@st.cache_resource(show_spinner=False)
+def _init_db_once() -> bool:
+    """Run the schema check/migrations once per server process. It issues
+    a dozen inspection queries, too slow to repeat for every visitor."""
+    database.init_db()
+    return True
+
+
+@st.cache_resource(show_spinner=False)
+def _daily_sqlite_backup(day: str) -> Optional[str]:
+    """Once per server per day: copy the SQLite database to <data dir>/backups
+    (last 7 kept). Does nothing on Postgres. `day` is only the cache key."""
+    try:
+        return database.backup_sqlite()
+    except Exception as exc:  # a failed backup must never break the page
+        import logging
+        logging.getLogger(__name__).warning("SQLite backup failed: %s", exc)
+        return None
+
+
 def bootstrap_session() -> None:
     """
     Ensure the database schema exists. Safe to call at the top of every
-    page — runs only once per session via the _BOOTSTRAPPED_KEY guard.
+    page — runs only once per server process (and is skipped entirely
+    for sessions that already passed the _BOOTSTRAPPED_KEY guard).
     """
     if not st.session_state.get(_BOOTSTRAPPED_KEY):
-        database.init_db()
+        _init_db_once()
         st.session_state[_BOOTSTRAPPED_KEY] = True
+    _daily_sqlite_backup(dt.date.today().isoformat())
 
 
 def get_active_date() -> Optional[dt.date]:
@@ -97,5 +119,5 @@ def default_active_date() -> Optional[dt.date]:
     current = get_active_date()
     if current is not None:
         return current
-    dates = database.get_available_dates()
+    dates = cached_db.get_available_dates()
     return dates[-1] if dates else None

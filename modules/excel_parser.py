@@ -32,6 +32,9 @@ from typing import Optional
 
 import pandas as pd
 
+from . import import_report as _import_report
+from .import_report import DATE_RAW_COL as _DATE_RAW_COL, ROW_COL as _ROW_COL
+
 REQUIRED_OUTPUT_COLS = ["date", "segment", "outlet", "location", "pax", "revenue", "aop"]
 
 # Column-name aliases used by the generic parser's fuzzy matching.
@@ -758,6 +761,8 @@ def parse_revenue_dashboard(
 
     df = pd.DataFrame()
     df["date"] = pd.to_datetime(raw[column_map["date"]], errors="coerce").dt.date
+    df[_ROW_COL] = raw[_ROW_COL] if _ROW_COL in raw.columns else pd.NA
+    df[_DATE_RAW_COL] = raw[column_map["date"]]
     df["segment"] = raw[column_map["segment"]].astype(str).str.strip()
     df["outlet"] = raw[column_map["outlet"]].astype(str).str.strip()
     df["location"] = raw[column_map["location"]].astype(str).str.strip().map(_normalize_location)
@@ -770,14 +775,56 @@ def parse_revenue_dashboard(
     )
     df["traffic"] = pd.NA
 
-    # Drop rows with no date or no location/segment/outlet — these are
-    # usually blank trailer rows at the bottom of a large sheet.
-    df = df.dropna(subset=["date"])
-    df = df[(df["segment"] != "") & (df["segment"].str.lower() != "nan")]
-    df = df[(df["outlet"] != "") & (df["outlet"].str.lower() != "nan")]
-    df = df[(df["location"] != "") & (df["location"].str.lower() != "nan")]
-    df = df.drop_duplicates(subset=["date", "segment", "outlet", "location"], keep="last")
+    # Rows that can't be imported are recorded in df.attrs["skipped_rows"]
+    # (Excel row + reason) so the Upload page can show them — see
+    # modules/import_report.py. Fully blank lines (nothing but empty cells)
+    # are just sheet padding and are not reported.
+    def _blank(series):
+        # astype(str) can leave a real NaN (newer pandas) or the text "nan"
+        text = series.astype(object).where(series.notna(), "")
+        return text.astype(str).str.strip().str.lower().isin(["", "nan", "none", "<na>"])
+
+    raw_pax = raw[column_map["pax"]]
+    raw_rev = raw[column_map["revenue"]]
+    shown = df.assign(pax=raw_pax.values, revenue=raw_rev.values)
+    date_cell_blank = _blank(df[_DATE_RAW_COL])
+    all_blank = (
+        date_cell_blank & _blank(df["segment"]) & _blank(df["outlet"])
+        & _blank(df["location"]) & df["pax"].isna() & df["revenue"].isna()
+    )
+    skipped = []
+    bad_date = df["date"].isna() & ~all_blank
+    # Excel error cells (#VALUE!, #REF!) are read as empty by pandas.
+    skipped.append(_import_report.frame(
+        shown[bad_date & date_cell_blank], "Date cell is empty or an Excel error such as #VALUE!"))
+    skipped.append(_import_report.frame(shown[bad_date & ~date_cell_blank], "Date is not a valid date"))
+    keep = ~bad_date & ~all_blank
+    for col_name, label in (("location", "Location"), ("segment", "Business"), ("outlet", "Outlet")):
+        missing_mask = keep & _blank(df[col_name])
+        skipped.append(_import_report.frame(shown[missing_mask], f"{label} is blank"))
+        keep &= ~missing_mask
+
+    # A figure typed as text (e.g. a stray "`") is read as blank: the row is
+    # still imported with its other figure, but say so.
+    for col_name, raw_col in (("revenue", raw_rev), ("pax", raw_pax)):
+        typed = raw_col.astype(str).str.strip()
+        not_number = keep & df[col_name].isna() & raw_col.notna() & (typed != "") & (typed.str.lower() != "nan")
+        other = "pax" if col_name == "revenue" else "revenue"
+        partly = not_number & df[other].notna()
+        skipped.append(_import_report.frame(
+            shown[partly], f"{col_name.upper() if col_name == 'pax' else 'Revenue'} is not a number — "
+            f"row imported without it", result="Imported without " + ("PAX" if col_name == "pax" else "revenue")))
+
+    df = df[keep]
+    # Exact repeats only — same-key lines with different values (month-end
+    # adjustments) are combined later in data_processor._validate_and_clean.
+    value_cols = [c for c in df.columns if c not in _import_report.HELPER_COLS]
+    dup = df.duplicated(subset=value_cols, keep="first")
+    skipped.append(_import_report.frame(
+        shown.loc[dup[dup].index], "Exact duplicate of an earlier row (same date, outlet and figures)"))
+    df = df[~dup]
     df = df.reset_index(drop=True)
+    df.attrs["skipped_rows"] = _import_report.combine(skipped)
 
     if df.empty:
         raise ExcelParseError(
@@ -814,6 +861,8 @@ def parse_generic_excel(file_obj, sheet_name: Optional[str] = None) -> pd.DataFr
 
     df = pd.DataFrame()
     df["date"] = pd.to_datetime(raw[column_map["date"]], errors="coerce").dt.date
+    df[_ROW_COL] = raw[_ROW_COL] if _ROW_COL in raw.columns else pd.NA
+    df[_DATE_RAW_COL] = raw[column_map["date"]]
     df["segment"] = raw[column_map["segment"]].astype(str).str.strip()
     df["outlet"] = raw[column_map["outlet"]].astype(str).str.strip()
     df["location"] = raw[column_map["location"]].astype(str).str.strip().map(_normalize_location)
@@ -836,7 +885,8 @@ def parse_generic_excel(file_obj, sheet_name: Optional[str] = None) -> pd.DataFr
 
     df = df.dropna(subset=["date"])
     df = df[df["revenue"].notna()]
-    df = df.drop_duplicates(subset=["date", "segment", "outlet", "location"], keep="last")
+    # Exact repeats only — same-key lines are combined in _validate_and_clean.
+    df = df.drop_duplicates()
     df = df.reset_index(drop=True)
 
     if df.empty:
@@ -870,6 +920,7 @@ def _locate_header_row_and_slice(
     if header_row_idx is not None:
         new_df = raw.iloc[header_row_idx + 1 :].copy()
         new_df.columns = [str(c).strip() for c in raw.iloc[header_row_idx]]
+        new_df[_ROW_COL] = new_df.index + 1   # raw is read with header=None: index 0 = Excel row 1
         return new_df.reset_index(drop=True)
 
     search_rows = min(10, len(raw))
@@ -886,10 +937,12 @@ def _locate_header_row_and_slice(
         # if this guess is wrong.
         new_df = raw.copy()
         new_df.columns = [str(c).strip() for c in new_df.iloc[0]]
+        new_df[_ROW_COL] = new_df.index + 1
         return new_df.iloc[1:].reset_index(drop=True)
 
     new_df = raw.iloc[found_idx + 1 :].copy()
     new_df.columns = [str(c).strip() for c in raw.iloc[found_idx]]
+    new_df[_ROW_COL] = new_df.index + 1
     return new_df.reset_index(drop=True)
 
 

@@ -1,33 +1,51 @@
-# Encalm Analytics — Daily Database Backup Script (v2)
-# Schedule via Windows Task Scheduler: daily at 2:00 AM
-# Keeps last 30 days of backups.
+# Encalm Analytics - daily database backup (SQLite)
+#
+# Schedule with Windows Task Scheduler, daily at 02:00 (see docs/SERVER_RUNBOOK.md):
+#   schtasks /create /tn EncalmBackup /sc daily /st 02:00 /ru SYSTEM /f /tr
+#     "powershell -NoProfile -ExecutionPolicy Bypass -File C:\encalm\backup_db.ps1"
+#
+# 1. Copies C:\encalm\data\revenue_analytics.db to C:\encalm\backups (safe
+#    while the app is running) and checks the copy (integrity + row counts).
+# 2. Copies it OFF this server to the folder named on the first line of
+#    C:\encalm\backup_offsite.txt (not in git), e.g. a network share
+#    \\nas\encalm-backups or a OneDrive/SharePoint-synced folder.
+# 3. Keeps 30 local and 90 off-server copies; alerts (notify.ps1) on failure.
+#
+# No passwords are needed: the database is a local SQLite file.
 
-$PgBin     = "C:\Program Files\PostgreSQL\17\bin"
-$BackupDir = "C:\encalm\backups"
-$DBName    = "encalm_analytics"
-$DBUser    = "encalm_user"
-$LogFile   = "C:\encalm\logs\backup.log"
-$Timestamp = Get-Date -Format "yyyy-MM-dd_HH-mm"
-$BackupFile = "$BackupDir\encalm_${Timestamp}.sql"
+$AppDir    = "C:\encalm"
+$Python    = "C:\Users\encalmit\AppData\Local\Python\bin\python.exe"
+$Database  = Join-Path $AppDir "data\revenue_analytics.db"
+$BackupDir = Join-Path $AppDir "backups"
+$LogFile   = Join-Path $AppDir "logs\backup.log"
 
-# Ensure dirs exist
-New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null
-New-Item -ItemType Directory -Path (Split-Path $LogFile) -Force | Out-Null
+. (Join-Path $PSScriptRoot "notify.ps1")
 
-# Run pg_dump
-$env:PGPASSWORD = "Encalm@2026"
-& "$PgBin\pg_dump.exe" -U $DBUser -d $DBName -f $BackupFile
-
-if ($LASTEXITCODE -eq 0) {
-    $size = (Get-Item $BackupFile).Length / 1KB
-    Add-Content -Path $LogFile -Value "$(Get-Date) [BACKUP] SUCCESS: $BackupFile ($([math]::Round($size,1)) KB)"
-} else {
-    Add-Content -Path $LogFile -Value "$(Get-Date) [BACKUP] FAILED: pg_dump exit code $LASTEXITCODE"
+function Write-Log($msg) {
+    $dir = Split-Path $LogFile
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
+    Add-Content -Path $LogFile -Value ("{0} [BACKUP] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $msg)
 }
 
-# Delete backups older than 30 days
-Get-ChildItem -Path $BackupDir -Filter "encalm_*.sql" |
-    Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) } |
-    Remove-Item -Force
+$Offsite = $null
+$cfg = Join-Path $AppDir "backup_offsite.txt"
+if (Test-Path $cfg) { $Offsite = (Get-Content $cfg -TotalCount 1).Trim() }
 
-Add-Content -Path $LogFile -Value "$(Get-Date) [BACKUP] Cleanup complete. Current backups: $(Get-ChildItem $BackupDir -Filter '*.sql').Count"
+$argsList = @((Join-Path $AppDir "scripts\backup_sqlite.py"),
+              "--db", $Database, "--dest", $BackupDir, "--keep", "30")
+if ($Offsite) { $argsList += @("--offsite", $Offsite, "--keep-offsite", "90") }
+
+$out = & $Python @argsList 2>&1 | Out-String
+$code = $LASTEXITCODE
+Write-Log ($out.Trim())
+
+if ($code -ne 0) {
+    Send-EncalmAlert -Title "Database backup FAILED" -Text $out.Trim() -Key "backup-failed"
+    exit 1
+}
+if (-not $Offsite) {
+    Write-Log "WARNING: no off-server copy (C:\encalm\backup_offsite.txt not set)"
+    Send-EncalmAlert -Title "Backup has no off-server copy" `
+        -Text "Set the off-server backup folder in C:\encalm\backup_offsite.txt" -Key "backup-no-offsite"
+}
+exit 0

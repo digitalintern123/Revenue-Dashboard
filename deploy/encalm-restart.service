@@ -1,0 +1,7 @@
+# /etc/systemd/system/encalm-restart.service  (triggered by encalm-restart.path)
+[Unit]
+Description=Restart Encalm Revenue Analytics
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl restart encalm.service

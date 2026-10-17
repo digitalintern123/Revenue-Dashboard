@@ -18,6 +18,7 @@ Nothing is hardcoded — all values come from the database.
 from __future__ import annotations
 
 import calendar as _cal
+import datetime as dt
 import traceback as _tb
 
 import pandas as pd
@@ -35,6 +36,9 @@ from modules.session import bootstrap_session, default_active_date, set_active_d
 from modules.app_logger import log_exception, show_friendly_error
 from modules.auth import require_login, render_user_badge
 from modules import table_style
+from modules import cached_db, charts, ui
+from modules.cached_db import get_available_dates as _cached_available_dates
+from modules.cached_db import load_for_date_range as _cached_load_range
 
 LOCATIONS = ["All Locations", "Delhi", "Hyderabad", "Goa", "Bhogapuram"]
 
@@ -78,8 +82,13 @@ def _subtotal_traffic(
 
 
 # ---------------------------------------------------------------------------
-# _build_location_report — exact copy from 8_Business_Performance.py
+# _build_location_report — one row per displayed outlet, built from the
+# outlets actually in the data
 # ---------------------------------------------------------------------------
+OTHER_OUTLETS_GROUP = "Other outlets"
+_GRAND_LABELS = ("TOTAL EHPL", "TOTAL", "Total")
+
+
 def _build_location_report(
     location: str,
     groups: dict[str, list[str]],
@@ -89,63 +98,129 @@ def _build_location_report(
     cmp_df: pd.DataFrame | None,
     aop_df_loc: pd.DataFrame | None,
 ) -> list[dict]:
+    """
+    Rows for one location's EHPL table.
+
+    Every outlet in the data (current or comparison period) and every AOP
+    line is counted exactly once: it is placed in the first group whose
+    name list contains it (or its canonical name), and outlets sharing a
+    display name are added together into one row. Outlets that no group
+    lists go to OTHER_OUTLETS_GROUP instead of being dropped, so the grand
+    total always equals the location's total in the data.
+    """
     if cur_df.empty:
         return []
 
     from modules.database import canonicalize_outlet_name as _co
     from modules.outlet_groups import get_display_name as _gdn
 
-    cur_agg = cur_df.groupby("outlet", as_index=False).agg(
-        revenue=("revenue", "sum"), pax=("pax", "sum")
-    )
-    cmp_agg = (
-        cmp_df.groupby("outlet", as_index=False).agg(
-            revenue=("revenue", "sum"), pax=("pax", "sum")
-        )
-        if cmp_df is not None and not cmp_df.empty
-        else pd.DataFrame(columns=["outlet", "revenue", "pax"])
-    )
+    def _agg(df):
+        if df is None or df.empty:
+            return {}
+        g = df.assign(outlet=df["outlet"].astype(str).str.strip()).groupby("outlet").agg(
+            revenue=("revenue", "sum"), pax=("pax", "sum"))
+        return {o: (float(r.revenue or 0), float(r.pax or 0)) for o, r in g.iterrows()}
 
-    aop_map: dict[str, float] = {}
+    cur_by_outlet = _agg(cur_df)
+    cmp_by_outlet = _agg(cmp_df)
+    has_cmp = bool(cmp_by_outlet)
+
+    # AOP by canonical outlet name (one value per AOP line, never counted twice)
+    aop_by_key: dict[str, float] = {}
     if aop_df_loc is not None and not aop_df_loc.empty and "aop" in aop_df_loc.columns:
-        aop_map = aop_df_loc.groupby("outlet")["aop"].sum().to_dict()
-        for raw_outlet, val in list(aop_map.items()):
-            canon = _co(raw_outlet)
-            if canon not in aop_map:
-                aop_map[canon] = val
+        for o, v in aop_df_loc.groupby("outlet")["aop"].sum().items():
+            if pd.notna(v) and v:
+                aop_by_key[_co(str(o).strip())] = aop_by_key.get(_co(str(o).strip()), 0.0) + float(v)
 
-    def _cur(outlet):
-        rows = cur_agg[cur_agg["outlet"] == outlet]
-        if not rows.empty:
-            return rows
-        canon = _co(outlet)
-        if canon != outlet:
-            rows = cur_agg[cur_agg["outlet"] == canon]
-            if not rows.empty:
-                return rows
-        disp = _gdn(outlet, location)
-        if disp != outlet and disp != canon:
-            rows = cur_agg[cur_agg["outlet"] == disp]
-        return rows
+    def _own_display(outlet: str) -> str:
+        d = _gdn(outlet, location)
+        if d == outlet:
+            canon = _co(outlet)
+            if canon != outlet:
+                d = _gdn(canon, location)
+        return d
 
-    def _cmp(outlet):
-        rows = cmp_agg[cmp_agg["outlet"] == outlet]
-        if not rows.empty:
-            return rows
-        canon = _co(outlet)
-        if canon != outlet:
-            rows = cmp_agg[cmp_agg["outlet"] == canon]
-            if not rows.empty:
-                return rows
-        disp = _gdn(outlet, location)
-        if disp != outlet and disp != canon:
-            rows = cmp_agg[cmp_agg["outlet"] == disp]
-        return rows
+    # display name of each group member -> (group, member), first group wins
+    by_member_display: dict[str, tuple[str, str]] = {}
+    for gk, members in groups.items():
+        for m in members:
+            by_member_display.setdefault(_gdn(m, location), (gk, m))
 
-    subtotal_label_set = {s[0] for s in subtotals}
-    group_totals: dict[str, dict] = {}
-    group_traffic_cur: dict[str, float | None] = {}
-    group_traffic_cmp: dict[str, float | None] = {}
+    resolved: dict[str, tuple[str, str]] = {}
+
+    def _resolve(outlet: str) -> tuple[str, str]:
+        """(group, display name) for a data/AOP outlet name."""
+        if outlet in resolved:
+            return resolved[outlet]
+        names = {outlet, _co(outlet)}
+        own = _own_display(outlet)
+        # exact name first, then the canonical form of a group member
+        hit = next(((gk, m) for gk, members in groups.items() for m in members
+                    if m in names), None) or \
+            next(((gk, m) for gk, members in groups.items() for m in members
+                  if _co(m) in names), None)
+        if hit is None:
+            hit = by_member_display.get(own)
+        if hit is None:
+            result = (OTHER_OUTLETS_GROUP, own)
+        else:
+            gk, alias = hit
+            # an outlet with no display name of its own takes its group member's
+            result = (gk, own if own != outlet else _gdn(alias, location))
+        resolved[outlet] = result
+        return result
+
+    def _group_of(outlet: str) -> str:
+        return _resolve(outlet)[0]
+
+    def _display(outlet: str) -> str:
+        return _resolve(outlet)[1]
+
+    # Merge data outlets into display rows
+    rows_by_display: dict[str, dict] = {}
+    for outlet in list(cur_by_outlet) + [o for o in cmp_by_outlet if o not in cur_by_outlet]:
+        display = _display(outlet)
+        r = rows_by_display.setdefault(display, {
+            "group": _group_of(outlet), "members": [],
+            "cur_rev": 0.0, "cur_pax": 0.0, "cmp_rev": None, "cmp_pax": None, "aop": 0.0,
+        })
+        r["members"].append(outlet)
+        cr, cp = cur_by_outlet.get(outlet, (0.0, 0.0))
+        r["cur_rev"] += cr
+        r["cur_pax"] += cp
+        if outlet in cmp_by_outlet:
+            pr, pp = cmp_by_outlet[outlet]
+            r["cmp_rev"] = (r["cmp_rev"] or 0.0) + pr
+            r["cmp_pax"] = (r["cmp_pax"] or 0.0) + pp
+
+    # The location's outlet list always shows, with "—" when a period has no figures
+    from modules.outlet_groups import ALWAYS_SHOW_ROWS
+    always_show = set()
+    for gk, name in ALWAYS_SHOW_ROWS.get(location, []):
+        rows_by_display.setdefault(name, {
+            "group": gk, "members": [],
+            "cur_rev": 0.0, "cur_pax": 0.0, "cmp_rev": None, "cmp_pax": None, "aop": 0.0,
+        })
+        always_show.add(name)
+
+    # Attach AOP: each AOP line to the row holding that outlet, else its own row
+    used_keys: set[str] = set()
+    for display, r in rows_by_display.items():
+        keys = {_co(m) for m in r["members"]} | {_co(display)}
+        for k in keys - used_keys:
+            if k in aop_by_key:
+                r["aop"] += aop_by_key[k]
+                used_keys.add(k)
+    for key, val in aop_by_key.items():
+        if key in used_keys:
+            continue
+        display = _display(key)
+        r = rows_by_display.setdefault(display, {
+            "group": _group_of(key), "members": [key],
+            "cur_rev": 0.0, "cur_pax": 0.0, "cmp_rev": None, "cmp_pax": None, "aop": 0.0,
+        })
+        r["aop"] += val
+        used_keys.add(key)
 
     try:
         _outlet_traf_cur = database.join_revenue_with_traffic_by_outlet(cur_df)
@@ -166,127 +241,107 @@ def _build_location_report(
     _traf_cur_lookup = _build_traffic_lookup(_outlet_traf_cur)
     _traf_cmp_lookup = _build_traffic_lookup(_outlet_traf_cmp)
 
-    seen_display: set[str] = set()
+    def _traffic(lookup, members, display):
+        for m in members:
+            for name in (m, _co(m)):
+                if lookup.get(name):
+                    return lookup[name]
+        return lookup.get(display) or None
+
+    # Outlet rows per group
+    group_rows: dict[str, list[dict]] = {}
+    for display, r in rows_by_display.items():
+        cur_rev, cur_pax = r["cur_rev"], r["cur_pax"]
+        cmp_rev, cmp_pax, aop = r["cmp_rev"], r["cmp_pax"], (r["aop"] or None)
+        if not (cur_rev or cur_pax or cmp_rev or cmp_pax or aop) and display not in always_show:
+            continue   # nothing to show in either period
+        traf_c = _traffic(_traf_cur_lookup, r["members"], display)
+        traf_p = _traffic(_traf_cmp_lookup, r["members"], display)
+        pen_c = ra.safe_div(cur_pax, traf_c) * 100 if traf_c else None
+        pen_p = ra.safe_div(cmp_pax, traf_p) * 100 if (traf_p and cmp_pax is not None) else None
+        spp_c = ra.safe_div(cur_rev, traf_c) if traf_c else None
+        spp_p = ra.safe_div(cmp_rev, traf_p) if (traf_p and cmp_rev is not None) else None
+        group_rows.setdefault(r["group"], []).append({
+            "Performance":  f"  {display}",
+            "_is_subtotal": False,
+            "_is_grand":    False,
+            "_section":     r["group"],
+            "cur_rev": cur_rev, "cmp_rev": cmp_rev,
+            "rev_yoy": ra.pct_change(cur_rev, cmp_rev),
+            "cur_pax": cur_pax, "cmp_pax": cmp_pax,
+            "pax_yoy": ra.pct_change(cur_pax, cmp_pax),
+            "cur_traffic": traf_c, "cmp_traffic": traf_p,
+            "traffic_chg": ra.pct_change(traf_c, traf_p),
+            "pen_cur": pen_c, "pen_cmp": pen_p,
+            "pen_chg": ra.pct_change(pen_c, pen_p),
+            "spp_cur": spp_c, "spp_cmp": spp_p,
+            "spp_chg": ra.pct_change(spp_c, spp_p),
+            "aop": aop,
+            "aop_var": ra.pct_change(cur_rev, aop) if aop else None,
+        })
+
+    group_totals: dict[str, dict] = {}
+    group_traffic_cur: dict[str, float | None] = {}
+    group_traffic_cmp: dict[str, float | None] = {}
+    for gk, g_rows in group_rows.items():
+        group_totals[gk] = {
+            "cur_rev": sum(r["cur_rev"] or 0 for r in g_rows),
+            "cmp_rev": sum(r["cmp_rev"] or 0 for r in g_rows if r["cmp_rev"]),
+            "cur_pax": sum(r["cur_pax"] or 0 for r in g_rows),
+            "cmp_pax": sum(r["cmp_pax"] or 0 for r in g_rows if r["cmp_pax"]),
+            "aop":     sum(r["aop"] or 0 for r in g_rows if r["aop"]),
+        }
+        group_traffic_cur[gk] = next((r["cur_traffic"] for r in g_rows if r["cur_traffic"]), None)
+        group_traffic_cmp[gk] = next((r["cmp_traffic"] for r in g_rows if r["cmp_traffic"]), None)
+
+    subtotal_defs = dict(subtotals)
+    # Groups the row order doesn't mention (and unlisted outlets) still show,
+    # just before the grand total.
+    order = [g for g in row_order if g in subtotal_defs or g in group_rows]
+    extra = [g for g in group_rows if g not in order]
+    grand_pos = next((i for i, g in enumerate(order)
+                      if g in subtotal_defs and g in _GRAND_LABELS), len(order))
+    order = order[:grand_pos] + extra + order[grand_pos:]
+
     all_rows: list[dict] = []
-
-    for _gk in row_order:
-        if _gk not in {s[0] for s in subtotals} and _gk in groups:
-            group_totals[_gk] = {
-                "cur_rev": 0, "cmp_rev": 0, "cur_pax": 0, "cmp_pax": 0, "aop": 0
-            }
-            group_traffic_cur[_gk] = None
-            group_traffic_cmp[_gk] = None
-
-    for group_key in row_order:
-        sub_def = next((s for s in subtotals if s[0] == group_key), None)
-        if sub_def is not None:
-            sub_label, src_groups = sub_def
-            sub_cur_rev = sum(group_totals.get(g, {}).get("cur_rev", 0) for g in src_groups)
-            sub_cmp_rev = sum(group_totals.get(g, {}).get("cmp_rev", 0) for g in src_groups)
-            sub_cur_pax = sum(group_totals.get(g, {}).get("cur_pax", 0) for g in src_groups)
-            sub_cmp_pax = sum(group_totals.get(g, {}).get("cmp_pax", 0) for g in src_groups)
-            sub_aop     = sum(group_totals.get(g, {}).get("aop", 0) for g in src_groups)
-            sub_cur_traf = _subtotal_traffic(src_groups, group_traffic_cur)
-            sub_cmp_traf = _subtotal_traffic(src_groups, group_traffic_cmp)
-
-            sub_pen_cur = ra.safe_div(sub_cur_pax, sub_cur_traf) * 100 if sub_cur_traf else None
-            sub_pen_cmp = ra.safe_div(sub_cmp_pax, sub_cmp_traf) * 100 if sub_cmp_traf else None
-            sub_spp_cur = ra.safe_div(sub_cur_rev, sub_cur_traf) if sub_cur_traf else None
-            sub_spp_cmp = ra.safe_div(sub_cmp_rev, sub_cmp_traf) if sub_cmp_traf else None
-
-            is_grand = sub_label in ("TOTAL EHPL", "TOTAL", "Total")
-            all_rows.append({
-                "Performance":  sub_label,
-                "_is_subtotal": True,
-                "_is_grand":    is_grand,
-                "_section":     None,
-                "cur_rev": sub_cur_rev, "cmp_rev": sub_cmp_rev or None,
-                "rev_yoy": ra.pct_change(sub_cur_rev, sub_cmp_rev or None),
-                "cur_pax": sub_cur_pax, "cmp_pax": sub_cmp_pax or None,
-                "pax_yoy": ra.pct_change(sub_cur_pax, sub_cmp_pax or None),
-                "cur_traffic": sub_cur_traf, "cmp_traffic": sub_cmp_traf,
-                "traffic_chg": ra.pct_change(sub_cur_traf, sub_cmp_traf),
-                "pen_cur": sub_pen_cur, "pen_cmp": sub_pen_cmp,
-                "pen_chg": ra.pct_change(sub_pen_cur, sub_pen_cmp),
-                "spp_cur": sub_spp_cur, "spp_cmp": sub_spp_cmp,
-                "spp_chg": ra.pct_change(sub_spp_cur, sub_spp_cmp),
-                "aop": sub_aop or None,
-                "aop_var": ra.pct_change(sub_cur_rev, sub_aop) if sub_aop else None,
-            })
+    for group_key in order:
+        if group_key not in subtotal_defs:
+            all_rows.extend(group_rows.get(group_key, []))
             continue
+        is_grand = group_key in _GRAND_LABELS
+        # The grand total is every row of the location, whatever its group.
+        src_groups = list(group_totals) if is_grand else subtotal_defs[group_key]
+        sub_cur_rev = sum(group_totals.get(g, {}).get("cur_rev", 0) for g in src_groups)
+        sub_cmp_rev = sum(group_totals.get(g, {}).get("cmp_rev", 0) for g in src_groups)
+        sub_cur_pax = sum(group_totals.get(g, {}).get("cur_pax", 0) for g in src_groups)
+        sub_cmp_pax = sum(group_totals.get(g, {}).get("cmp_pax", 0) for g in src_groups)
+        sub_aop     = sum(group_totals.get(g, {}).get("aop", 0) for g in src_groups)
+        sub_cur_traf = _subtotal_traffic(src_groups, group_traffic_cur)
+        sub_cmp_traf = _subtotal_traffic(src_groups, group_traffic_cmp)
 
-        if group_key not in groups:
-            continue
-        outlets = groups[group_key]
-        g_rows: list[dict] = []
+        sub_pen_cur = ra.safe_div(sub_cur_pax, sub_cur_traf) * 100 if sub_cur_traf else None
+        sub_pen_cmp = ra.safe_div(sub_cmp_pax, sub_cmp_traf) * 100 if sub_cmp_traf else None
+        sub_spp_cur = ra.safe_div(sub_cur_rev, sub_cur_traf) if sub_cur_traf else None
+        sub_spp_cmp = ra.safe_div(sub_cmp_rev, sub_cmp_traf) if sub_cmp_traf else None
 
-        for outlet in outlets:
-            cur_row = _cur(outlet)
-            if cur_row.empty:
-                continue
-            cur_rev = float(cur_row["revenue"].sum())
-            cur_pax = float(cur_row["pax"].sum())
-            cmp_row = _cmp(outlet)
-            cmp_rev = float(cmp_row["revenue"].sum()) if not cmp_row.empty else None
-            cmp_pax = float(cmp_row["pax"].sum()) if not cmp_row.empty else None
-            if cur_rev == 0 and (cmp_rev is None or cmp_rev == 0):
-                continue
-
-            display = get_display_name(outlet, location)
-            if display in seen_display:
-                continue
-            seen_display.add(display)
-
-            traf_c = (_traf_cur_lookup.get(outlet) or
-                      _traf_cur_lookup.get(_co(outlet)) or
-                      _traf_cur_lookup.get(_gdn(outlet, location)))
-            traf_p = (_traf_cmp_lookup.get(outlet) or
-                      _traf_cmp_lookup.get(_co(outlet)) or
-                      _traf_cmp_lookup.get(_gdn(outlet, location)))
-
-            pen_c = ra.safe_div(cur_pax, traf_c) * 100 if traf_c else None
-            pen_p = ra.safe_div(cmp_pax, traf_p) * 100 if traf_p else None
-            spp_c = ra.safe_div(cur_rev, traf_c) if traf_c else None
-            spp_p = ra.safe_div(cmp_rev, traf_p) if traf_p else None
-            aop = (aop_map.get(outlet) or
-                   aop_map.get(_co(outlet)) or
-                   aop_map.get(_gdn(outlet, location)))
-
-            row = {
-                "Performance":  f"  {display}",
-                "_is_subtotal": False,
-                "_is_grand":    False,
-                "_section":     group_key,
-                "cur_rev": cur_rev, "cmp_rev": cmp_rev,
-                "rev_yoy": ra.pct_change(cur_rev, cmp_rev),
-                "cur_pax": cur_pax, "cmp_pax": cmp_pax,
-                "pax_yoy": ra.pct_change(cur_pax, cmp_pax),
-                "cur_traffic": traf_c, "cmp_traffic": traf_p,
-                "traffic_chg": ra.pct_change(traf_c, traf_p),
-                "pen_cur": pen_c, "pen_cmp": pen_p,
-                "pen_chg": ra.pct_change(pen_c, pen_p),
-                "spp_cur": spp_c, "spp_cmp": spp_p,
-                "spp_chg": ra.pct_change(spp_c, spp_p),
-                "aop": aop,
-                "aop_var": ra.pct_change(cur_rev, aop) if aop else None,
-            }
-            g_rows.append(row)
-            all_rows.append(row)
-
-        if g_rows:
-            group_totals[group_key] = {
-                "cur_rev": sum(r["cur_rev"] or 0 for r in g_rows),
-                "cmp_rev": sum(r["cmp_rev"] or 0 for r in g_rows if r["cmp_rev"]),
-                "cur_pax": sum(r["cur_pax"] or 0 for r in g_rows),
-                "cmp_pax": sum(r["cmp_pax"] or 0 for r in g_rows if r["cmp_pax"]),
-                "aop":     sum(r["aop"] or 0 for r in g_rows if r["aop"]),
-            }
-            group_traffic_cur[group_key] = next(
-                (r["cur_traffic"] for r in g_rows if r["cur_traffic"]), None
-            )
-            group_traffic_cmp[group_key] = next(
-                (r["cmp_traffic"] for r in g_rows if r["cmp_traffic"]), None
-            )
+        all_rows.append({
+            "Performance":  group_key,
+            "_is_subtotal": True,
+            "_is_grand":    is_grand,
+            "_section":     None,
+            "cur_rev": sub_cur_rev, "cmp_rev": (sub_cmp_rev or None) if has_cmp else None,
+            "rev_yoy": ra.pct_change(sub_cur_rev, sub_cmp_rev or None),
+            "cur_pax": sub_cur_pax, "cmp_pax": (sub_cmp_pax or None) if has_cmp else None,
+            "pax_yoy": ra.pct_change(sub_cur_pax, sub_cmp_pax or None),
+            "cur_traffic": sub_cur_traf, "cmp_traffic": sub_cmp_traf,
+            "traffic_chg": ra.pct_change(sub_cur_traf, sub_cmp_traf),
+            "pen_cur": sub_pen_cur, "pen_cmp": sub_pen_cmp,
+            "pen_chg": ra.pct_change(sub_pen_cur, sub_pen_cmp),
+            "spp_cur": sub_spp_cur, "spp_cmp": sub_spp_cmp,
+            "spp_chg": ra.pct_change(sub_spp_cur, sub_spp_cmp),
+            "aop": sub_aop or None,
+            "aop_var": ra.pct_change(sub_cur_rev, sub_aop) if sub_aop else None,
+        })
 
     return all_rows
 
@@ -364,7 +419,7 @@ def _render_mis_table(rows: list[dict], cur_label: str, cmp_label: str, location
             if is_grand:
                 styles.append(
                     "font-weight: bold; border-top: 2px solid #ccc; "
-                    "background-color: #f0f4ff;"
+                    "background-color: #F3ECE1;"
                 )
             elif is_sub:
                 styles.append("font-weight: bold;")
@@ -412,7 +467,7 @@ def _render_mis_table(rows: list[dict], cur_label: str, cmp_label: str, location
 # ---------------------------------------------------------------------------
 def _load_aop(ranges: dict) -> pd.DataFrame:
     try:
-        _raw_aop = database.load_aop_targets_for_range(
+        _raw_aop = cached_db.load_aop_targets_for_range(
             ranges["current_start"], ranges["current_end"]
         )
         if _raw_aop is not None and not _raw_aop.empty:
@@ -426,7 +481,8 @@ def _load_aop(ranges: dict) -> pd.DataFrame:
             from modules.database import canonicalize_outlet_name as _co_aop
             _raw_aop["location"] = _raw_aop["location"].astype(str).str.strip().str.title()
             _raw_aop["outlet"]   = _raw_aop["outlet"].astype(str).str.strip().apply(_co_aop)
-            return _raw_aop[["location", "outlet", "aop"]].copy()
+            _cols = ["location", "outlet", "aop"] + (["segment"] if "segment" in _raw_aop.columns else [])
+            return _raw_aop[_cols].copy()
     except Exception:
         pass
     return pd.DataFrame()
@@ -458,10 +514,14 @@ def _render_kpi_cards(
     cur_traf = None
     if show_traffic:
         try:
-            tdf = database.join_revenue_with_traffic_by_outlet(cur_df)
+            # Whole-airport traffic per location (its stored terminal rows,
+            # each counted once). Adding up the outlets' pools instead
+            # double-counts: the whole-airport pool (Atithya) already
+            # contains the Domestic / International / terminal pools.
+            tdf = database.join_revenue_with_traffic(cur_df)
             if tdf is not None and not tdf.empty and "traffic" in tdf.columns:
-                # Deduplicate traffic pools — sum unique values per location
-                cur_traf = float(tdf.drop_duplicates(subset=["traffic"])["traffic"].sum())
+                traf = pd.to_numeric(tdf["traffic"], errors="coerce")
+                cur_traf = float(traf.sum()) if traf.notna().any() else None
         except Exception:
             pass
 
@@ -471,187 +531,49 @@ def _render_kpi_cards(
     pen     = ra.safe_div(cur_pax, cur_traf) * 100 if cur_traf else None
     spp     = ra.safe_div(cur_rev, cur_traf) if cur_traf else None
 
-    st.markdown("##### Location Total")
-    cols = st.columns(5 if show_traffic else 4)
-
-    with cols[0]:
-        st.metric(
-            f"Revenue ({cur_label})",
-            format_money(cur_rev),
-            delta=format_pct(rev_chg) if rev_chg is not None else None,
-            help=f"Compare period: {format_money(cmp_rev) if cmp_rev else '—'} ({cmp_label})",
-        )
-    with cols[1]:
-        st.metric(
-            f"PAX ({cur_label})",
-            format_pax(cur_pax),
-            delta=format_pct(pax_chg) if pax_chg is not None else None,
-            help=f"Compare period: {format_pax(cmp_pax) if cmp_pax else '—'} ({cmp_label})",
-        )
-    with cols[2]:
-        if aop_total:
-            st.metric(
-                "AOP Target",
-                format_money(aop_total),
-                help="Prorated AOP target for this period",
-            )
-            st.metric(
-                "AOP Variance",
-                format_pct(aop_var) if aop_var is not None else "—",
-            )
-        else:
-            st.metric("AOP", "—", help="No AOP target data for this period")
+    ui.section("Overview")
+    # One card per metric in a single row. Labels stay short so they never
+    # truncate; the period is in the summary line above and in each tooltip.
+    cards = [
+        dict(label="Revenue", value=format_money(cur_rev),
+             delta=format_pct(rev_chg) if rev_chg is not None else None,
+             help=f"{cur_label}. Compare period ({cmp_label}): "
+                  f"{format_money(cmp_rev) if cmp_rev else '—'}"),
+        dict(label="PAX", value=format_pax(cur_pax),
+             delta=format_pct(pax_chg) if pax_chg is not None else None,
+             help=f"{cur_label}. Compare period ({cmp_label}): "
+                  f"{format_pax(cmp_pax) if cmp_pax else '—'}"),
+    ]
+    if aop_total:
+        cards.append(dict(
+            label="AOP Target", value=format_money(aop_total),
+            delta=(f"{format_pct(aop_var)} vs AOP" if aop_var is not None else None),
+            help="Prorated AOP target for this period; delta is revenue variance vs AOP",
+        ))
+    else:
+        cards.append(dict(label="AOP Target", value="—", help="No AOP target data for this period"))
 
     if show_traffic:
-        with cols[3]:
-            st.metric("Traffic", format_pax(cur_traf) if cur_traf else "—",
-                      help="Terminal traffic for this location")
-        with cols[4]:
-            pen_str = f"{pen:.2f}%" if pen is not None else "—"
-            spp_str = format_spp(spp) if spp is not None else "—"
-            st.metric("PEN %", pen_str, help="PAX / Traffic x 100")
-            st.metric("SPP", spp_str, help="Revenue / Traffic")
+        cards += [
+            dict(label="Traffic", value=format_pax(cur_traf) if cur_traf else "—",
+                 help="Terminal traffic for this location"),
+            dict(label="PEN %", value=f"{pen:.2f}%" if pen is not None else "—",
+                 help="PAX / Traffic x 100"),
+            dict(label="SPP", value=format_spp(spp) if spp is not None else "—",
+                 help="Revenue / Traffic"),
+        ]
     else:
-        with cols[3]:
-            st.metric("PAX (compare)", format_pax(cmp_pax) if cmp_pax else "—",
-                      help=cmp_label)
+        cards.append(dict(label="PAX (compare)",
+                          value=format_pax(cmp_pax) if cmp_pax else "—", help=cmp_label))
 
-
-# ---------------------------------------------------------------------------
-# Terminal-wise section (EHPL only)
-# ---------------------------------------------------------------------------
-def _render_terminal_section(
-    location: str,
-    cur_df: pd.DataFrame,
-    cmp_df: pd.DataFrame | None,
-    cur_label: str,
-    cmp_label: str,
-):
-    st.markdown("#### Terminal-wise Performance")
-
-    if cur_df is None or cur_df.empty:
-        st.info("No data for terminal analysis.")
-        return
-
-    try:
-        outlet_traf = database.join_revenue_with_traffic_by_outlet(cur_df)
-        cmp_outlet_traf = database.join_revenue_with_traffic_by_outlet(cmp_df) \
-            if (cmp_df is not None and not cmp_df.empty) else pd.DataFrame()
-    except Exception:
-        st.info("Terminal data not available.")
-        return
-
-    if outlet_traf is None or outlet_traf.empty:
-        st.info("No terminal data available for this location and period.")
-        return
-
-    # Aggregate by terminal label from terminal_mapping
-    try:
-        from modules import terminal_mapping as tm
-
-        def _get_term(row):
-            try:
-                t = tm.get_terminal_for_outlet(str(row["outlet"]), location.title())
-                return t if t else "Other"
-            except Exception:
-                return "Other"
-
-        outlet_traf["_terminal"] = outlet_traf.apply(_get_term, axis=1)
-        skip = {"Other", "Unmapped", "", "None", "nan"}
-        display_df = outlet_traf[~outlet_traf["_terminal"].astype(str).isin(skip)].copy()
-
-        if display_df.empty:
-            # Fallback: show raw outlet-level traffic
-            rows = []
-            for _, row in outlet_traf.iterrows():
-                traf = row.get("traffic")
-                rev  = row.get("revenue", 0) or 0
-                pax  = row.get("pax", 0) or 0
-                traf_v = float(traf) if traf is not None and pd.notna(traf) else None
-                pen  = ra.safe_div(pax, traf_v) * 100 if traf_v else None
-                spp  = ra.safe_div(rev, traf_v) if traf_v else None
-                rows.append({
-                    "Outlet": str(row.get("outlet", "")),
-                    f"Rev ({cur_label})": format_money(rev) if rev else "—",
-                    "Traffic": format_pax(traf_v) if traf_v else "—",
-                    "PEN %": f"{pen:.2f}%" if pen is not None else "—",
-                    "SPP": format_spp(spp) if spp is not None else "—",
-                })
-            if rows:
-                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-            else:
-                st.info("No terminal breakdown available for this location.")
-            return
-
-        def _agg(grp):
-            rev  = grp["revenue"].sum()
-            pax  = grp["pax"].sum()
-            tvs  = grp["traffic"].dropna().unique()
-            traf = float(max(tvs)) if len(tvs) > 0 else None
-            return pd.Series({"revenue": rev, "pax": pax, "traffic": traf})
-
-        term_agg = display_df.groupby("_terminal").apply(_agg).reset_index()
-        term_agg = term_agg.sort_values("revenue", ascending=False)
-
-        # Compare period
-        cmp_term_map: dict = {}
-        if not cmp_outlet_traf.empty:
-            cmp_outlet_traf["_terminal"] = cmp_outlet_traf.apply(_get_term, axis=1)
-            cmp_disp = cmp_outlet_traf[
-                ~cmp_outlet_traf["_terminal"].astype(str).isin(skip)
-            ]
-            if not cmp_disp.empty:
-                cmp_agg_df = cmp_disp.groupby("_terminal").apply(_agg).reset_index()
-                cmp_term_map = {
-                    row["_terminal"]: {
-                        "revenue": row["revenue"],
-                        "traffic": row["traffic"],
-                    }
-                    for _, row in cmp_agg_df.iterrows()
-                }
-
-        rows = []
-        for _, row in term_agg.iterrows():
-            term  = str(row["_terminal"])
-            rev   = float(row.get("revenue") or 0)
-            pax   = float(row.get("pax") or 0)
-            traf  = row.get("traffic")
-            tv    = float(traf) if traf is not None and not pd.isna(traf) else None
-            pen   = ra.safe_div(pax, tv) * 100 if tv else None
-            spp   = ra.safe_div(rev, tv) if tv else None
-            cmp_d = cmp_term_map.get(term, {})
-            cmp_r = cmp_d.get("revenue")
-            rev_chg = ra.pct_change(rev, cmp_r) if cmp_r else None
-            r = {
-                "Terminal": term,
-                f"Rev ({cur_label})": format_money(rev) if rev else "—",
-                "Traffic": format_pax(tv) if tv else "—",
-                "PEN %": f"{pen:.2f}%" if pen is not None else "—",
-                "SPP": format_spp(spp) if spp is not None else "—",
-            }
-            if cmp_r is not None:
-                r[f"Rev ({cmp_label})"] = format_money(cmp_r)
-                r["Rev Chg %"] = format_pct(rev_chg) if rev_chg is not None else "—"
-            rows.append(r)
-
-        if rows:
-            term_df = pd.DataFrame(rows)
-            pct_cols = [c for c in ["Rev Chg %"] if c in term_df.columns]
-            st.dataframe(
-                table_style.style_pct_columns(term_df, pct_cols),
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "Terminal": st.column_config.TextColumn("Terminal", width="medium"),
-                },
-            )
-            st.caption("PEN % = PAX / Terminal Traffic x 100.  SPP = Revenue / Traffic.")
-        else:
-            st.info("No terminal breakdown available.")
-
-    except Exception as e:
-        log_exception(e, context=f"Terminal section {location}")
-        st.info("Terminal data not available for this location.")
+    # Up to 4 cards fit on one row; 5–6 cards wrap into rows of 3 so the
+    # rupee values are never truncated.
+    per_row = len(cards) if len(cards) <= 4 else 3
+    for i in range(0, len(cards), per_row):
+        for col, card in zip(st.columns(per_row), cards[i:i + per_row]):
+            with col:
+                st.metric(card["label"], card["value"], delta=card.get("delta"),
+                          help=card.get("help"))
 
 
 # ---------------------------------------------------------------------------
@@ -667,6 +589,8 @@ def _render_subsidiary_table(
     cmp_label: str,
 ):
     """Simple outlet table for non-airport businesses. No terminal columns."""
+    if cmp_label == cur_label:
+        cmp_label = f"{cmp_label} (compare)"   # keep column names unique
     if cur_df is None or cur_df.empty:
         st.info(f"No {segment} data for {location_label} in this period.")
         return
@@ -737,6 +661,30 @@ def _render_subsidiary_table(
         st.info(f"No {segment} outlet data for {location_label} in this period.")
         return
 
+    # AOP for planned outlets that had no sales in this period (not yet open,
+    # or not reported in the DSR under that name). Shown as one line so the
+    # table's AOP total equals the location AOP in the KPI cards.
+    _unmatched_aop: dict = {}
+    if aop_map:
+        sold = {str(r["Performance"]).strip() for r in rows}
+        unmatched = {o: v for o, v in aop_map.items() if o not in sold and v}
+        if unmatched:
+            other_aop = float(sum(unmatched.values()))
+            r = {
+                "Performance":  f"  Other planned outlets – no sales ({len(unmatched)})",
+                "_is_subtotal": False,
+                "_is_grand":    False,
+                f"PAX ({cur_label})": "—",
+                "PAX Chg %": "—",
+                f"Rev ({cur_label})": "—",
+                "Rev Chg %": "—",
+                "AOP Target": format_money(other_aop),
+                "AOP Var %": "—",
+            }
+            rows.append(r)
+            totals["aop"] += other_aop
+            _unmatched_aop = unmatched
+
     # Total row — built from accumulated totals, placed at TOP
     t_rev_chg = ra.pct_change(totals["cur_rev"], totals["cmp_rev"] or None)
     t_pax_chg = ra.pct_change(totals["cur_pax"], totals["cmp_pax"] or None)
@@ -761,6 +709,9 @@ def _render_subsidiary_table(
     rows = [total_row] + rows
 
     display_df = pd.DataFrame(rows)
+    for _c in ("AOP Target", "AOP Var %"):
+        if _c in display_df.columns:
+            display_df[_c] = display_df[_c].fillna("—")
     meta_cols  = ["_is_subtotal", "_is_grand"]
 
     # Enforce explicit column order matching EHPL:
@@ -792,8 +743,8 @@ def _render_subsidiary_table(
         for i in range(len(s)):
             if meta.iloc[i]["_is_grand"]:
                 styles.append(
-                    "font-weight: bold; background-color: #1e3a5f; "
-                    "color: white; border-top: 2px solid #0f2744;"
+                    "font-weight: bold; background-color: #142248; "
+                    "color: white; border-top: 2px solid #0C1530;"
                 )
             elif meta.iloc[i]["_is_subtotal"]:
                 styles.append("font-weight: bold;")
@@ -823,6 +774,16 @@ def _render_subsidiary_table(
         column_order=show_cols,
     )
 
+    if _unmatched_aop:
+        with st.expander(f"Planned outlets with AOP but no sales — {location_label}"):
+            st.dataframe(
+                pd.DataFrame(
+                    [{"Outlet": o, "AOP Target": format_money(v)}
+                     for o, v in sorted(_unmatched_aop.items(), key=lambda kv: -kv[1])]
+                ),
+                use_container_width=True, hide_index=True,
+            )
+
 
 # ---------------------------------------------------------------------------
 # Common filter + data load block
@@ -837,31 +798,36 @@ def _render_filters_and_load(page_key: str, available_dates: list | None = None)
     """
     # ── Date first (drives which locations are available) ──────────────────
     if available_dates is None:
-        available_dates = database.get_available_dates()
+        available_dates = cached_db.get_available_dates()
     if not available_dates:
         st.info("No data available. Upload a report on the Home page first.")
         st.stop()
 
-    col_date, col_loc = st.columns([2, 1])
+    bar = st.container(border=True)
+    with bar:
+        col_date, col_type, col_loc = st.columns([3, 1.3, 1.3])
+        with col_date:
+            anchor_date = date_picker.render_date_dropdown(
+                available_dates,
+                key_prefix=f"{page_key}_anchor",
+                label="Report Date",
+                default_date=default_active_date(),
+                compact=True,
+            )
+            set_active_date(anchor_date)
 
-    with col_date:
-        anchor_date = date_picker.render_date_dropdown(
-            available_dates,
-            key_prefix=f"{page_key}_anchor",
-            label="Report Date",
-            default_date=default_active_date(),
-        )
-        set_active_date(anchor_date)
-
-    ranges = comparison_widget.render_comparison_selector(
-        anchor_date, key_prefix=f"{page_key}_cmp"
-    )
+        col_cmp, _ = st.columns([3, 2.6])
+        with col_cmp:
+            ranges = comparison_widget.render_comparison_selector(
+                anchor_date, key_prefix=f"{page_key}_cmp",
+                type_container=col_type, compact=True,
+            )
 
     # ── Load data ──────────────────────────────────────────────────────────
-    current_df_all = database.load_for_date_range(
+    current_df_all = cached_db.load_for_date_range(
         ranges["current_start"], ranges["current_end"]
     )
-    compare_df_all = database.load_for_date_range(
+    compare_df_all = cached_db.load_for_date_range(
         ranges["compare_start"], ranges["compare_end"]
     )
     aop_df = _load_aop(ranges)
@@ -895,7 +861,58 @@ def _render_filters_and_load(page_key: str, available_dates: list | None = None)
             key=prev_key,
         )
 
+    ui.summary_line(ranges["current_label"], ranges["compare_label"], location)
     return location, ranges, current_df_all, compare_df_all, aop_df
+
+
+def _render_overview_charts(
+    cur_df: pd.DataFrame,
+    cmp_df: pd.DataFrame | None,
+    location: str,
+    ranges: dict,
+    row_filter,
+) -> None:
+    """Two charts side by side: revenue by location/outlet (current vs
+    compare) and the 30-day daily revenue trend ending on the report date."""
+    by = "location" if location == "All Locations" else "outlet"
+    # Month/Year-wise periods can end in the future — anchor the trend on
+    # the latest date that actually has data inside the current period.
+    end = ranges["current_end"]
+    try:
+        _dates = [d for d in _cached_available_dates() if d <= end]
+        if _dates:
+            end = max(_dates)
+    except Exception:
+        pass
+    try:
+        trend = _cached_load_range(end - dt.timedelta(days=29), end)
+        trend = _filter_by_location(row_filter(trend), location)
+        if not trend.empty:
+            trend = (trend.assign(date=pd.to_datetime(trend["date"]))
+                          .groupby("date", as_index=False)["revenue"].sum())
+    except Exception as e:
+        log_exception(e, context="overview trend chart")
+        trend = pd.DataFrame()
+
+    if trend.empty:
+        # No daily history for this business (e.g. DSR-only data) — bar only.
+        with st.container(border=True):
+            charts.revenue_by_group_bar(
+                cur_df, cmp_df, by, ranges["current_label"], ranges["compare_label"],
+                title=f"Revenue by {by}",
+            )
+        return
+
+    c1, c2 = st.columns(2)
+    with c1, st.container(border=True):
+        charts.revenue_by_group_bar(
+            cur_df, cmp_df, by, ranges["current_label"], ranges["compare_label"],
+            title=f"Revenue by {by}",
+        )
+    with c2, st.container(border=True):
+        charts.revenue_trend_line(
+            trend, title="Daily revenue — last 30 days", highlight_date=end,
+        )
 
 
 def _filter_by_location(df: pd.DataFrame, location: str) -> pd.DataFrame:
@@ -920,11 +937,12 @@ def render_ehpl_page(page_key: str = "ehpl"):
         BHOGAPURAM_GROUPS, BHOGAPURAM_SUBTOTALS, BHOGAPURAM_ROW_ORDER,
     )
 
-    st.title("EHPL")
-    st.caption(
+    ui.page_header(
+        "EHPL",
         "Airport hospitality — Lounges, Spa, Nap & Shower, Atithya, "
         "Enwrap, Business Centre, RDC. "
-        "PEN % = PAX / Terminal Traffic x 100.  SPP = Revenue / Terminal Traffic."
+        "PEN % = PAX / Terminal Traffic x 100.  SPP = Revenue / Terminal Traffic.",
+        icon="plane-takeoff",
     )
 
     location, ranges, current_df_all, compare_df_all, aop_df = \
@@ -932,8 +950,6 @@ def render_ehpl_page(page_key: str = "ehpl"):
 
     cur_label = ranges["current_label"]
     cmp_label = ranges["compare_label"]
-
-    st.divider()
 
     _non_ehpl = {"Encalm Eats", "Sky Plates", "Subsidiary"}
 
@@ -954,6 +970,12 @@ def render_ehpl_page(page_key: str = "ehpl"):
         st.stop()
 
     cmp_df_arg = ehpl_cmp if not ehpl_cmp.empty else None
+
+    # Sky Plates / Encalm Eats targets live in the same table; EHPL shows only its own.
+    aop_df = _ehpl_filter(aop_df)
+    _aop_loc = _filter_by_location(aop_df, location) if not aop_df.empty else None
+    _render_kpi_cards(ehpl_cur, cmp_df_arg, _aop_loc, cur_label, cmp_label, show_traffic=True)
+    _render_overview_charts(ehpl_cur, cmp_df_arg, location, ranges, _ehpl_filter)
 
     def _render_one_location(loc_name: str):
         loc_norm = loc_name.title()
@@ -1009,12 +1031,11 @@ def render_ehpl_page(page_key: str = "ehpl"):
             st.warning("No EHPL data available for the selected period.")
             st.stop()
 
-        for i, loc_name in enumerate(available):
-            if i > 0:
-                st.markdown("---")
-            st.markdown(f"### {loc_name}")
+        for loc_name in available:
+            ui.section(loc_name)
             _render_one_location(loc_name)
     else:
+        ui.section(location)
         _render_one_location(location)
 
 
@@ -1022,15 +1043,16 @@ def render_ehpl_page(page_key: str = "ehpl"):
 # Public: render_subsidiary_page (Encalm Eats / Sky Plates)
 # ---------------------------------------------------------------------------
 def render_subsidiary_page(segment: str, page_key: str, icon: str = ""):
+    """`icon` is a Lucide icon name (assets/icons) shown in the page header."""
     require_login()
     bootstrap_session()
     render_user_badge()
 
-    seg_label = f"{icon} {segment}".strip()
-    st.title(seg_label)
-    st.caption(
+    ui.page_header(
+        segment,
         f"{segment} performance by location and outlet. "
-        "No airport terminal metrics shown for this business."
+        "No airport terminal metrics shown for this business.",
+        icon=icon or None,
     )
 
     location, ranges, current_df_all, compare_df_all, aop_df = \
@@ -1038,8 +1060,6 @@ def render_subsidiary_page(segment: str, page_key: str, icon: str = ""):
 
     cur_label = ranges["current_label"]
     cmp_label = ranges["compare_label"]
-
-    st.divider()
 
     # Filter by segment
     def _seg_filter(df):
@@ -1056,15 +1076,28 @@ def render_subsidiary_page(segment: str, page_key: str, icon: str = ""):
         st.warning(f"No {segment} data for {location} in the selected period.")
         st.stop()
 
-    # AOP is not applicable for Encalm Eats / Sky Plates — pass None throughout.
-    aop_df_loc = None
+    # ── AOP targets for this segment (imported by eats_skyplates_aop_parser) ──
+    # Rows are outlet-level with no subtotal rows, so summing is safe; each
+    # month in the range is prorated by the days selected in that month.
+    from modules.eats_skyplates_aop_parser import align_aop_to_outlets
+    from modules.cached_db import load_segment_aop  # cached: no re-query per click
 
-    # KPI cards (no traffic, no AOP for non-airport segments)
+    def _get_aop_for_loc(loc_name: str) -> pd.DataFrame | None:
+        df_aop = load_segment_aop(segment, ranges["current_start"], ranges["current_end"],
+                                  location=loc_name)
+        return df_aop if not df_aop.empty else None
+
+    aop_df_all_seg = _get_aop_for_loc("All Locations") if location == "All Locations" else None
+    aop_df_loc = _get_aop_for_loc(location) if location != "All Locations" else aop_df_all_seg
+
+    # KPI cards (no traffic, but AOP now supported for these segments)
     _render_kpi_cards(
         seg_cur, seg_cmp if not seg_cmp.empty else None,
-        None, cur_label, cmp_label, show_traffic=False
+        aop_df_loc, cur_label, cmp_label, show_traffic=False
     )
-    st.divider()
+    _render_overview_charts(
+        seg_cur, seg_cmp if not seg_cmp.empty else None, location, ranges, _seg_filter,
+    )
 
     def _render_one_location(loc_name: str):
         loc_norm = loc_name.title()
@@ -1075,9 +1108,10 @@ def render_subsidiary_page(segment: str, page_key: str, icon: str = ""):
                 seg_cmp if not seg_cmp.empty else None
             )
 
-        st.markdown(f"**{loc_name}**")
+        aop_for_loc = align_aop_to_outlets(_get_aop_for_loc(loc_name), df_c)
+        ui.section(loc_name)
         _render_subsidiary_table(
-            segment, loc_name, df_c, df_p, None, cur_label, cmp_label
+            segment, loc_name, df_c, df_p, aop_for_loc, cur_label, cmp_label
         )
 
     if location == "All Locations":
@@ -1097,10 +1131,10 @@ def render_subsidiary_page(segment: str, page_key: str, icon: str = ""):
 
         for loc_name in available:
             _render_one_location(loc_name)
-            st.divider()
     else:
+        ui.section(location)
         _render_subsidiary_table(
             segment, location, seg_cur,
             seg_cmp if not seg_cmp.empty else None,
-            None, cur_label, cmp_label
+            align_aop_to_outlets(aop_df_loc, seg_cur), cur_label, cmp_label
         )

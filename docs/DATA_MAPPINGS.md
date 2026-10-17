@@ -1,239 +1,242 @@
-# DATA_MAPPINGS.md
-# Encalm Revenue Analytics — Data Mappings
+# Data Mappings — from file lines to dashboard rows
+
+How a line in an uploaded file ends up as a stored outlet, and which row it
+appears on in the app. Source of truth is the code named in each section.
 
 ---
 
-## 1. Outlet Name Canonicalization
+## 1. Stored names
 
-**Function:** `canonicalize_outlet_name(outlet: str) -> str`
-**File:** `database.py:590`
-**Applied:** At save time in `save_dataframe()`. Pages always see canonical names.
+### Location
+Title-cased (`delhi` → `Delhi`). Locations: Delhi, Hyderabad, Goa, Bhogapuram.
 
-### Key Mappings (sample — full list in database.py:553)
+### Segment and business unit — `database.canonicalize_segment_and_business_unit`
 
-| Raw name in source file | Canonical name stored in DB |
-|---|---|
-| `INL 5&6` | `International Lounge` |
-| `T3 INL 5&6` | `International Lounge` |
-| `Regular Lounge` | `Domestic Lounge - T1 L4&5` |
-| `T1D Lounge` | `Domestic Lounge - T1 L4&5` |
-| `T2 Domestic` | `Domestic Lounge - T2` |
-| `T3 DLO2/03/04` | `T3 DLO2/03/04` (unchanged) |
-| `Lounge DL 02,03,04` | `Domestic Lounge T3` |
-| `T3 D49` | `Domestic Lounge - D49` |
-| `Air India` | `Domestic Lounge - Air India` |
-| `Rupay` | `Domestic Lounge - Rupay` |
-| `Centurion Lounge T3` | `Centurion Lounge T3` |
-| `Dom Prive` | `Domestic Lounge - T1 Prive` |
-| `Baggage Wrapping` | `Baggage Wrapping` (unchanged) |
-| `Meet & Greet` | `Meet & Greet` (unchanged) |
-| `Buggy Service` | `Buggy Service` |
-| `Xenia` | `Xenia` |
-| `INTL Spa` | `INTL Spa` |
-| `SPA Domestic` | `Domestic Spa - T1` |
-| `T1D SPA` | `Domestic Spa - T1` |
-| `SPA - Premium Lounge` | `Spa - International` |
-
----
-
-## 2. Delhi MIS Row Structure (Page 8)
-
-**File:** `outlet_groups.py` — `DELHI_GROUPS`, `DELHI_SUBTOTALS`, `DELHI_ROW_ORDER`
-
-### Complete Row Map
-
-| Row # | Display Name | Group Key | Raw DB Variants | Terminal |
-|---|---|---|---|---|
-| 1 | Encalm Lounge (T1 D) | `T1D (Lounges)` | T1D Lounge, T1D L4&5 Lounge, T1D Lounge-1 Node L4&5 Card, Domestic Lounge - T1 L4&5, Regular Lounge | T1 Dep |
-| 2 | Encalm Prive (T1) | `Encalm Prive (T1)` | T1D new premium lounge 2 (level 5), Domestic Lounge - T1 Prive, Dom Prive | T1 Dep |
-| 3 | Amex Lounge T1 | `Amex Lounge T1` | T1D new Amex Lounge (level 4), Centurion Lounge T1, DomesticLounge- Centurion Amex T1 | T1 Dep |
-| 4 | Encalm Lounge (T2 D) | `T2 (Lounges)` | T2 Domestic, T2 Lounge, Domestic Lounge - T2, Domestic Bar - T2 | T2 Dep |
-| **5** | **▶ Total(T1+T2)** | SUBTOTAL | T1D(Lounges)+Prive T1+Amex T1+T2(Lounges) | — |
-| 6 | Encalm Lounge (T3 DL023 &4) | `T3 Domestic DL02/3/4` | T3 DLO2/03/04, T3 DL023 &4, T3 DL02/03/04, Lounge DL 02,03,04, Lounge DL 02&03, Domestic Lounge T3, Domestic Lounge (DEL DLO2/3/4, HYD), Domestic Bar - DLO2/3/4 | T3 Dom Dep |
-| 7 | Encalm Lounge (T3 –D 49) | `T3 D49` | T3 D49, Domestic Lounge - D49, Domestic Bar - D49 | T3 Dom Dep |
-| 8 | Air India Lounge (T3 Dom) | `T3 Air India Dom` | Domestic AI Lounge Del, Air India, Domestic Lounge - Air India | T3 Dom Dep |
-| 9 | Lounge Rupay | `Lounge Rupay` | Rupay, Lounge - Rupay, Domestic Lounge - Rupay, Domestic Bar - Rupay | T3 Dom Dep |
-| 10 | Lounge Amex Centurion | `Lounge Amex Centurion` | Lounge - Amex Centurion, Centurion Lounge, Centurion Lounge T3, DomesticLounge- Centurion Amex T3 | T3 Dom Dep |
-| **11** | **▶ Total (T3 Domestic)** | SUBTOTAL | rows 6-10 | — |
-| **12** | **▶ T1 + T2 + T3 Dom** | SUBTOTAL | rows 1-10 | — |
-| 13 | Encalm Lounge (T3 INT) | `T3 International` | INL 5&6, T3 INL 5&6, International Lounge, International Lounge (DEL INL5&6; HYD & GOA), International Bar - INL5&6 Hyd & Goa | T3 Int Dep |
-| 14 | Encalm Prive (T3) | `Encalm Prive T3` | Premium Lounge, T3 Premium, International Lounge - Premium, International Bar - Premium Lounge | T3 Int Dep |
-| 15 | Encalm Xenia | `Encalm Xenia` | Xenia, First Class - Xenia Lounge, Xenia - INL T3 | T3 Int Dep |
-| 16 | AI International | `AI International` | AI International Lounge, International Lounge - Air India | T3 Int Dep |
-| **17** | **▶ Total (T3 International)** | SUBTOTAL | rows 13-16 | — |
-| 18 | Arrival Lounge- ( T3 LA22) | `T3 Arrivals LA22` | Arrival Lounge LA 22, Arrival Lounge - LA22, LA 22, Reserved Lounge | T3 Arr |
-| 19 | Nap Rooms LA01 | `T3 Nap LA01` | Nap & Shower LA01, Transit Lounge - LA01, NAP - Premium Lounge | T3 Arr |
-| 20 | Nap Rooms LA12 | `T3 Nap LA12` | Nap & Shower LA12, Transit Lounge - LA12, Sleeping Pod - Premium Lounge | T3 Arr |
-| **21** | **▶ Total Arrivals** | SUBTOTAL | rows 18-20 | — |
-| 22 | Enwrap | `Enwrap` | Baggage Wrapping, Enwrap Services | All Dep |
-| 23 | Porter | `Atithya (Porter)` | Porter, Porter Services- T1, Porter Services -T2, Porter Services -T3 | Porter Pool |
-| 24 | Buggy | `Atithya (Buggy)` | Buggy Service, Buggy Services, Buggy Del | T3 Total |
-| 25 | Atithya | `Atithya (M&G)` | Meet & Greet, Welcome & Assist, CIP Lounge, Special Events | All |
-| **26** | **▶ Atithya (M&G, Porter, Buggy)** | SUBTOTAL | rows 22-25 | — |
-| 27 | Encalm Spa (T3 INT) | `Spa T3 INT` | INTL Spa, Spa - International, International Spa- INL07 T3, SPA - Premium Lounge | T3 Int Dep |
-| 28 | Encalm Spa (T3 Dom) | `Spa T3 Dom` | Domestic Spa - T3, Domestic Spa- DPA10 T3, SPA Domestic, Dom Spa | T3 Int Dep |
-| 29 | Encalm Spa (T1 Dom) | `Spa T1` | T1D SPA, Domestic Spa - T1, Domestic Spa- T1 | T1 Dep |
-| **30** | **▶ TOTAL EHPL** | SUBTOTAL | all EHPL groups | All |
-
----
-
-## 3. Hyderabad MIS Row Structure
-
-**File:** `outlet_groups.py` — `HYD_GROUPS`, `HYD_SUBTOTALS`, `HYD_ROW_ORDER`
-
-| Row # | Display Name | Group Key | Raw DB Variants | Terminal |
-|---|---|---|---|---|
-| 1 | Atithya | `Atithya` | Meet & Greet, Welcome & Assist, Meet and Greet, Meet & Greet (Hyderabad), M&G, M&G Hyd, GAT, GAT (Hyderabad), Airport Lodge, Airport Lodge (Hyderabad), Ceremonial(Del)/GA(Hyd)/CIP(Goa), Transit Hotel, Transit Lounge | All |
-| 2 | Domestic Lounge | `Domestic Lounge` | Domestic Lounge (DEL DLO2/3/4, HYD), Domestic Lounge, Domestic Lounge T3, Domestic Bar - DLO2/3/4 Hyd & Goa, Domestic Lounge (New), Domestic Lounge (Hyderabad), Hyd Dom Lounge, HYD DOM Prive, RL Domestic Arrival D, RL Dom Dep E, RL Dom Dep F | Domestic |
-| 3 | International Lounge | `International Lounge` | International Lounge (DEL INL5&6; HYD & GOA), International Lounge, International Lounge (Hyderabad), International Bar - INL5&6 Hyd & Goa, International Lounge (New), Hyd Intl Lounge, Hyd Intl Lounge - Closing, INT Card Lounge, INT Card Lounge - new (Level E) - Upcoming, Hyd GA Lounge, RL Int Arrival D, Reserved Lounge | International |
-| 4 | Encalm Prive | `Encalm Prive` | International Lounge - Premium, Premium Lounge, International Bar - Premium Lounge, SPA - Premium Lounge, Dom Prive, Prive, Prive (Hyderabad), Encalm Prive, INT Prive - Mezzanine level | International |
-| **5** | **▶ Total (International + Prive)** | SUBTOTAL | International Lounge + Encalm Prive | — |
-| 6 | Baggage Wrapping | `Baggage Wrapping` | Baggage Wrapping, Enwrap Services, Baggage Wrapping (Hyderabad), Baggage Wrapping (Hyd), Enwrap | All |
-| 7 | Porter | `Porter` | Porter, Porter (Hyderabad) | All |
-| 8 | Sky Plates | `Sky Plates` | Encalm Sky Plates, Sky Plates, Encalm Sky Plates (Hyderabad), Sky Plates (Hyderabad), Sky Plates Hyd | — |
-| **9** | **▶ TOTAL** | SUBTOTAL | Atithya + Domestic + International + Prive + Baggage Wrapping + Porter | — |
-
----
-
-## 4. Goa MIS Row Structure
-
-**File:** `outlet_groups.py` — `GOA_GROUPS`, `GOA_SUBTOTALS`, `GOA_ROW_ORDER`
-
-| Row # | Display Name | Group Key | Raw DB Variants | Terminal |
-|---|---|---|---|---|
-| 1 | Atithya | `Atithya` | Meet & Greet, Welcome & Assist, Meet & Greet (Goa), M&G, M&G Goa, Ceremonial(Del)/GA(Hyd)/CIP(Goa), CIP Lounge | All |
-| 2 | Porter | `Porter` | Porter, Porter (Goa), Porter Services- T1 | All |
-| **3** | **▶ Total (Atithya + Porter)** | SUBTOTAL | Atithya + Porter | — |
-| 4 | Domestic Lounge | `Domestic Lounge` | Domestic Lounge (DEL DLO2/3/4, HYD), Domestic Lounge, Domestic Lounge (Goa), Domestic Lounge T3, Domestic Bar - DLO2/3/4 Hyd & Goa, Goa Lounge Dom, RL Dom Departure, RL Dom Arrival | Domestic |
-| 5 | International Lounge | `International Lounge` | International Lounge (DEL INL5&6; HYD & GOA), International Lounge, International Lounge (Goa), International Bar - INL5&6 Hyd & Goa, Reserve Lounges, Reserved Lounge, CIP Lounge, Prive (Goa), Goa Lounge INTL, RL Int Arrival | International |
-| 6 | Baggage Wrapping | `Baggage Wrapping` | Baggage Wrapping, Enwrap Services, Baggage Wrapping (Goa), Enwrap | All |
-| **7** | **▶ Total** | SUBTOTAL | Atithya + Porter + Domestic + International + Baggage Wrapping | — |
-
----
-
-## 5. Terminal Pool → Composite Sentinel Resolution
-
-**Function:** `database.join_revenue_with_traffic_by_outlet()` — `database.py:1847`
-
-The `airport_traffic` table stores physical terminal labels. Page 8 and traffic calculations need composite totals. Resolution happens inside `_get_traffic()` nested function:
-
-| Sentinel | Resolved as | Outlets that use it |
+| File "Business" / outlet | Stored segment | Business unit |
 |---|---|---|
-| `T3 Arr` | T3 Dom Arr + T3 Int Arr | LA22, LA01, LA12, RL Delhi |
-| `All Dep` | T1 Dep + T2 Dep + T3 Dom Dep + T3 Int Dep | Enwrap |
-| `All` | All 8 terminal pools | Atithya/M&G, HYD Atithya, GOA Atithya |
-| `T3 Total` | T3 Dom Dep + T3 Int Dep + T3 Dom Arr + T3 Int Arr | Buggy |
-| `Porter Pool` | T1 Dep + T1 Arr + T2 Dep + T2 Arr + T3 Dom Dep + T3 Int Dep | Porter |
-| `T3 Dom+Int Dep` | T3 Dom Dep + T3 Int Dep | RL T3 Departure |
-| `Main Terminal` | Dom + Int + Main Terminal | HYD/GOA fallback |
+| Outlet *Encalm Sky Plates* / *Sky Plates* (any Business) | Sky Plates | Sky Plates |
+| Outlet *Encalm Eats* (any Business) | Encalm Eats | Encalm Eats |
+| Lounges / Atithya / Others | EHPL | the Business value |
+| EHPL | EHPL | inferred from the outlet (`_CANONICAL_OUTLET_TO_BU`, default Lounges) |
+| anything else | passed through unchanged | |
+
+### Outlet — `database.canonicalize_outlet_name` (`_OUTLET_NAME_CANONICAL`)
+Every known spelling maps to one stored name, e.g. `INL 5&6` → *International
+Lounge*, `T1D Lounge` / `T1D L4&5 Lounge` / `Regular Lounge` → *Domestic Lounge -
+T1 L4&5*, `Transit Lounge` → *Transit Hotel*, `Dom Prive` / `Prive` →
+*Domestic Lounge - Prive*. Lines that map to the same date + outlet + location
+are **added together** at save time.
 
 ---
 
-## 6. Display Name Lookup Chain (Page 8)
+## 2. How an EHPL table row is built
 
-`get_display_name(outlet, location)` in `outlet_groups.py:443`
+`business_dashboard._build_location_report` (then `ehpl_layout._build_table_rows`):
 
-```
-1. Check LOCATION_DISPLAY_OVERRIDES[location][outlet]  ← location-specific overrides
-2. Check OUTLET_DISPLAY_NAMES[outlet]                  ← global display names (124 entries)
-3. Return outlet unchanged                             ← no override found
-```
+1. Take every outlet **present in the data** for the current or comparison
+   period, plus every AOP line for the location.
+2. Find its **group** (`outlet_groups.<LOC>_GROUPS`) — first an exact member
+   name, then a member's canonical name, then a member's display name.
+   No match → group **"Other outlets"** (shown under TOTAL OTHERS — never dropped).
+3. Find its **display name** — `outlet_groups.get_display_name(outlet, location)`:
+   `LOCATION_DISPLAY_OVERRIDES[location]` first, then `OUTLET_DISPLAY_NAMES`;
+   an outlet with no display name of its own takes its group member's.
+4. Outlets with the **same display name are added together** into one row.
+5. AOP lines attach to the row holding that outlet (each AOP line once).
+6. Rows in `ALWAYS_SHOW_ROWS[location]` are added even with no figures.
+7. Rows with no revenue, PAX, comparison figures or AOP are hidden (except 6).
+8. Section totals come from their rows; **TOTAL EHPL = all rows**, so it always
+   equals the location's EHPL total in the database.
+9. `ehpl_layout.<LOC>_SECTIONS` places groups in sections (LOUNGES, SPA,
+   NAP & SHOWER, ATITHYA SERVICES, ENWRAP, PORTER, BAR, OTHERS); unknown groups
+   go to OTHERS.
 
-**Location-specific overrides** (`LOCATION_DISPLAY_OVERRIDES`):
-- Hyderabad: `"International Lounge"` → `"International Lounge"` (prevent Delhi T3 INT override)
-- Hyderabad: `"Baggage Wrapping"` → `"Baggage Wrapping"` (not "Enwrap")
-- Goa: same as Hyderabad
-
----
-
-## 7. Revenue Fallback Chain (Page 8 `_cur()` / `_cmp()`)
-
-When looking up revenue for an outlet group in `_build_location_report()`:
-
-```python
-def _cur(outlet):
-    rows = cur_agg[cur_agg["outlet"] == outlet]      # 1. Try raw group name
-    if not rows.empty: return rows
-    canon = _co(outlet)                               # 2. Try canonical name
-    rows = cur_agg[cur_agg["outlet"] == canon]
-    if not rows.empty: return rows
-    disp = _gdn(outlet, location)                     # 3. Try display name
-    rows = cur_agg[cur_agg["outlet"] == disp]
-    return rows
-```
-
-This is needed because `DELHI_GROUPS` uses raw/input names as group keys, but `revenue_master` stores canonical names. The chain ensures revenue is always found regardless of which name variant was stored.
+AOP for EHPL excludes Sky Plates and Encalm Eats targets.
 
 ---
 
-## 8. Traffic Fallback Chain (Page 8)
+## 3. Encalm Eats / Sky Plates rows
 
-```python
-traf_c = (
-    _traf_cur_lookup.get(outlet) or           # 1. raw name
-    _traf_cur_lookup.get(_co(outlet)) or      # 2. canonical
-    _traf_cur_lookup.get(_gdn(outlet, loc))   # 3. display name
-)
-```
-
-`_traf_cur_lookup` is built from `join_revenue_with_traffic_by_outlet(cur_df)` which resolves all composite sentinels.
+`business_dashboard._render_subsidiary_table`: one row per stored outlet.
+Revenue uploads carry one *Encalm Eats* / *Encalm Sky Plates* row per location
+per day; the DSR carries real outlets. `eats_skyplates_aop_parser.align_aop_to_outlets`
+lines AOP up with the outlets shown (single-outlet data takes the whole
+location AOP; combined AOP lines are split by revenue share). AOP for outlets
+with no sales is shown as **Other planned outlets – no sales (n)**.
 
 ---
 
-## 9. AOP Fallback Chain (Page 8)
+## 4. Outlet rows per location (EHPL)
 
-```python
-aop = (
-    aop_map.get(outlet) or              # 1. raw name
-    aop_map.get(_co(outlet)) or         # 2. canonical
-    aop_map.get(_gdn(outlet, location)) # 3. display name
-)
-```
+Generated from the code with the Aug-2026 revenue workbook (all 68 line items,
+2022–2026). Several names on one line = renamed outlets or items the
+management report adds together. Rows marked "always shown" are in
+`ALWAYS_SHOW_ROWS`; for Hyderabad, Goa and Bhogapuram that list is the full
+outlet list agreed with the business.
 
-`aop_map` is built from `load_aop_targets_for_range()` directly (not `join_revenue_with_aop()`).
-Outlet names in `aop_target` table are canonicalized at save time (`save_aop_targets()` applies `_co_aop`).
+### Delhi
+
+| Section | Row in the app | Sub-Business names in the revenue file |
+|---|---|---|
+| LOUNGES | AI International | AI International Lounge |
+| LOUNGES | Air India Lounge (T3 Dom) | Air India |
+| LOUNGES | Amex Lounge T1 | T1D new Amex Lounge (level 4) |
+| LOUNGES | Arrival Lounge- ( T3 LA22) | Arrival Lounge LA 22, Delhi - T3 - LA 22, LA 22 |
+| LOUNGES | Encalm Lounge (T1 D) | Regular Lounge, T1D L4&5 Lounge, T1D Lounge |
+| LOUNGES | Encalm Lounge (T2, D) | T2 Domestic |
+| LOUNGES | Encalm Lounge (T3 DL023 &4) | Lounge DL 02&03, Lounge DL 02,03,04 |
+| LOUNGES | Encalm Lounge (T3 INT) | INL 5&6 |
+| LOUNGES | Encalm Lounge (T3 –D 49) | T3 D49 |
+| LOUNGES | Encalm Prive (T1) | T1D new premium lounge 2 (level 5) |
+| LOUNGES | Encalm Prive (T3) | Premium Lounge |
+| LOUNGES | Encalm Xenia | First Class - Xenia Lounge |
+| LOUNGES | Lounge Amex Centurion | Centurion Lounge |
+| LOUNGES | Lounge Rupay | Rupay |
+| LOUNGES | RL Delhi | Reserved Lounge, Visitor Lounge |
+| SPA | Encalm Spa (T1 Dom) | T1D SPA |
+| SPA | Encalm Spa (T3 Dom) | SPA Domestic |
+| SPA | Encalm Spa (T3 INT) | Spa - International |
+| NAP & SHOWER | Nap Rooms LA01 | Nap & Shower LA01 |
+| NAP & SHOWER | Nap Rooms LA12 | LA 12, Nap & Shower LA12 |
+| ATITHYA SERVICES | Atithya | Meet & Greet |
+| ATITHYA SERVICES | Buggy | Buggy Service |
+| ATITHYA SERVICES | CIP Lounge | CIP Lounge |
+| ATITHYA SERVICES | Porter | Porter |
+| ATITHYA SERVICES | Special Events | Special Events |
+| ENWRAP | Enwrap | Baggage Wrapping |
+| OTHERS | Bar | Bar |
+| OTHERS | Business Centre | Business Center |
+| OTHERS | MLCP | MLCP |
+| OTHERS | Round D Clock (RDC) | Round D Clock (RDC) |
+
+### Hyderabad
+
+| Section | Row in the app | Sub-Business names in the revenue file |
+|---|---|---|
+| LOUNGES | Domestic Lounge | Domestic Lounge, Domestic Lounge (New) |
+| LOUNGES | Encalm Prive | Dom Prive, Prive |
+| LOUNGES | GAT | GAT |
+| LOUNGES | International Lounge | International Lounge, International Lounge (New) |
+| LOUNGES | Reserved Lounge | Reserved Lounge |
+| ATITHYA SERVICES | Atithya | Meet & Greet |
+| ENWRAP | Enwrap | Baggage Wrapping |
+| OTHERS | Airport Lodge / Dormitory | Airport Lodge |
+| OTHERS | Transit Hotel | Transit Hotel, Transit Lounge |
+
+### Goa
+
+| Section | Row in the app | Sub-Business names in the revenue file |
+|---|---|---|
+| LOUNGES | CIP Lounge | CIP Lounge |
+| LOUNGES | Domestic Lounge | Domestic Lounge |
+| LOUNGES | International Lounge | International Lounge |
+| LOUNGES | Reserved Lounge | Reserved Lounge |
+| ATITHYA SERVICES | Atithya | Meet & Greet |
+| ENWRAP | Enwrap | Baggage Wrapping |
+| PORTER | Porter | Porter |
+
+### Bhogapuram
+
+| Section | Row in the app | Sub-Business names in the revenue file |
+|---|---|---|
+| LOUNGES | Domestic Lounge | Domestic Lounge |
+| LOUNGES | International Lounge | International Lounge |
+| LOUNGES | Reserved Lounge | Reserved Lounge |
+| SPA | Spa Domestic | — (always shown; no line in the file yet) |
+| ATITHYA SERVICES | Atithya | Meet & Greet |
+| ENWRAP | Enwrap | Baggage Wrapping |
+| PORTER | Porter | Porter |
+
+Sky Plates and Encalm Eats lines of the revenue file go to their own pages
+(one row per location).
 
 ---
 
-## 10. How to Add a New Outlet
+## 5. Encalm Eats AOP → DSR outlets
 
-Edit these files **in order**:
+`eats_skyplates_aop_parser.py` reads the AOP master's **IFK** rows (→ Sky
+Plates, one target per location, outlet *Encalm Sky Plates*) and **F&B** rows
+(→ Encalm Eats, the outlet rows under each section head; heads are subtotals
+and are only used to check the outlets add up).
 
-### Step 1 — `modules/database.py`
-Add raw name → canonical name mapping in `_OUTLET_NAME_CANONICAL` dict (~line 553):
-```python
-"new raw name variant":  "Canonical Outlet Name",
-```
+`_DSR_OUTLET_MAP` — key (location, section, AOP name, occurrence):
 
-### Step 2 — `modules/terminal_mapping.py`
-Add canonical name → terminal pool in the appropriate location dict:
-```python
-# _DELHI_OUTLET_TO_TERMINAL (line ~83)
-"Canonical Outlet Name":  "T3 Int Dep",   # use the correct terminal constant
-```
-Also add raw variants if they might appear in traffic lookups.
+| Location / section | AOP line | DSR outlet |
+|---|---|---|
+| Delhi T3 Departures | Chaayos 42A | Chaayos T3 Gate No. 42A |
+| Delhi T3 Departures | Chaayos 54-55 | Chaayos T3 Gate No 54 |
+| Delhi T3 Departures | IndiSip 44 | IndiSip T3 - Mezzanine Gate 44 |
+| Delhi T3 Departures | IndiSip 3 | IndiSip T3 - Int. IFK 02, Gate 03 |
+| Delhi T3 Departures | IndiSip 32-34 | IndiSip T3 - Int. Gate no 32 |
+| Delhi T3 Arrivals | CDH | Cafe Delhi Heights T3 Domestic Arrival |
+| Delhi T2 Departures | IndiSip SHA | IndiSip T2 - Bus Gate |
+| Delhi T2 Departures | Indisip PreChk | IndiSip T2 - Pre Checkin |
+| Delhi T2 Departures | Haldiram PreChk | Haldiram T2 Pre Check-in |
+| Delhi T2 Departures | Indisip Bar PESC | J&B Pour House T2 |
+| Delhi Events & ODCs | Events & ODCs | Event/ODC |
+| Bhogapuram | Mc Donald's | McDonald's- Bhogapuram |
+| Bhogapuram | IndiSip (1st) | IndiSip Café |
+| Bhogapuram | IndiSip (2nd) | Indisip Bistro |
+| Bhogapuram | Starbucks (2nd line) | Starbucks Departure **+** Starbucks Arrival (split by revenue) |
+| Bhogapuram | South Indian Culinary House | Svara |
+| Bhogapuram | Multi-Cuisine Concept | Totally Desi |
 
-### Step 3 — `modules/outlet_groups.py`
-Add display name in `OUTLET_DISPLAY_NAMES`:
-```python
-"Canonical Outlet Name":  "Display Name for MIS Table",
-```
-Add to the correct group in `DELHI_GROUPS` / `HYD_GROUPS` / `GOA_GROUPS`:
-```python
-"Group Key": [
-    ...existing outlets...,
-    "new raw name variant",
-    "Canonical Outlet Name",
-],
-```
+- **Not matched yet** (kept as "*Name (Section)*", shown as planned outlets):
+  BAR SHA, Walkway, Carnatic Café, Chaayos (T3 Arrivals), Subway, KFC, Popeyes,
+  Fly High BAR, GMR, IROP.
+- **DSR outlets with no AOP line:** ALD, VTZ INN, Cafeteria Admin Block.
+- **Lines with a note** in the Business Segment column (e.g. "Put in as other
+  rev", "Change as per actual") are **not imported** (provisional figures) and
+  are listed as *Not imported* in the upload's mapping table. In the current
+  master: Star Bucks (T2), Starbucks (Bhogapuram, 1st), Events & ODCs,
+  Institutional Catering.
+- Location "All" (Events & ODCs) is stored under Delhi.
 
-### Step 4 — `pages/3_Revenue_Comparison.py`
-Add to `_OUTLET_MAP` (lowercase) for Tab 5 Dom/Int classification:
-```python
-"canonical outlet name":  "Domestic",  # or "International" or "Ancillary"
-```
+To map a new line: add an entry to `_DSR_OUTLET_MAP` with the exact DSR
+outlet name (as stored by the DSR parser) and re-import the AOP master with
+*Replace* ticked.
 
-### Step 5 — Run tests
-```bash
-python -m pytest tests/ -v  # must still show 158 passed
-```
+---
+
+## 6. Encalm Eats DSR parser — `encalm_eats_dsr_parser.py`
+
+- One sheet per day (`DD-MM-YYYY`); outlet rows follow "Outlet Wise Detail".
+- Section headers set the location and are never stored as outlets:
+  *Delhi Store's* / *Delhi* → Delhi; *Bhogapuram* / *Bhogapuram Store's* →
+  Bhogapuram. *Encalm Eats* (grand total) is skipped.
+- Names are trimmed and repeated spaces collapsed; `_CANONICAL` fixes known
+  spellings (e.g. *Events/ODC* → *Event/ODC*).
+- Rows with no covers and no revenue are skipped; MTD/YTD columns are stored
+  for reference only.
+- Saving skips rows already stored for the same date + outlet + location.
+
+---
+
+## 7. Recognising a file — layout registry
+
+`format_registry` reports, sheet by sheet, which reader handled the file:
+
+| Upload | Layouts recognised (first match wins) |
+|---|---|
+| Revenue | Encalm PDF report · long table (Date / Location / Business / Outlet / PAX / Revenue — `LAYOUT_LONG`) · stacked daily blocks · wide pivot · simple table · auto-detected (`universal_parser`, with its confidence) · **saved layout** (only when nothing better than the generic readers matched) |
+| Traffic | Terminal × Dep./Arr. grid · Domestic/International × PAX/Flights grid · Hyderabad/Vizag side by side · Goa two month blocks · flat export · simple table · saved layout |
+| AOP | AOP master outlet × month · daily outlet pivot · daily total per location (+ Sky Plates / Encalm Eats from the master) |
+| DSR | one sheet per day (DD-MM-YYYY) with outlet rows |
+
+Confidence: 100 % when the revenue long table reconciles exactly with the
+file; 95 % for the dedicated readers; the auto-detected reader's own score;
+saved layout = share of headers matched. Below 80 % the upload screen offers
+*Teach the app this layout* (`layout_learning`, `mapping_editor`).
+
+## 8. Adding a new EHPL outlet
+
+1. `modules/database.py` — add its spellings to `_OUTLET_NAME_CANONICAL`
+   (and `_CANONICAL_OUTLET_TO_BU` if the business unit is not Lounges).
+2. `modules/terminal_mapping.py` — map it to its terminal (for traffic, PEN %, SPP).
+3. `modules/outlet_groups.py` — add it to the location's `*_GROUPS` (new group
+   or existing), give it a display name (`OUTLET_DISPLAY_NAMES` or
+   `LOCATION_DISPLAY_OVERRIDES`), and to `ALWAYS_SHOW_ROWS` if it should
+   always be listed.
+4. `modules/ehpl_layout.py` — put a new group into the right section.
+5. Run the tests. Without steps 3–4 the outlet still shows (under OTHERS, with
+   its stored name) and is counted in the totals.

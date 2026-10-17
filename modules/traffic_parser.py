@@ -49,11 +49,12 @@ COLUMN_ALIASES = {
     ],
 }
 
-_KNOWN_LOCATIONS = {"delhi", "hyderabad", "goa"}
+_KNOWN_LOCATIONS = {"delhi", "hyderabad", "goa", "bhogapuram"}
 _LOCATION_NORMALIZATION = {
     "delhi": "Delhi", "del": "Delhi",
     "hyderabad": "Hyderabad", "hyd": "Hyderabad",
     "goa": "Goa", "gox": "Goa", "goi": "Goa",
+    "bhogapuram": "Bhogapuram", "vizag": "Bhogapuram", "vtz": "Bhogapuram",
 }
 
 # Sheet-name -> location for the cross-tab format, where each sheet is
@@ -63,6 +64,9 @@ _SHEET_NAME_TO_LOCATION = {
     "hyd": "Hyderabad",
     "gox": "Goa",
     "goa": "Goa",
+    "vizag": "Bhogapuram",
+    "vtz": "Bhogapuram",
+    "bhogapuram": "Bhogapuram",
 }
 
 # Segment-name -> canonical terminal, for the Delhi sheet's column groups.
@@ -215,6 +219,15 @@ def parse_traffic_simple(file_obj, match: dict) -> pd.DataFrame:
     return out
 
 
+# Reader names shown on the upload "Analyse" panel (df.attrs["readers"])
+READER_CROSS_TAB = "Terminal × Dep./Arr. grid (daily or monthly)"
+READER_DOM_INTL = "Domestic / International × PAX / Flights grid"
+READER_SIDE_BY_SIDE = "Domestic | International side by side (PAX only, Flights ignored)"
+READER_GOA_BLOCKS = "Two month blocks side by side (latest month kept)"
+READER_FLAT_EXPORT = "Flat export (DOM_ARR_PAX … columns)"
+READER_SIMPLE = "Simple table (Date, Location, Traffic)"
+
+
 def parse_traffic_auto(file_obj, source_file: str = "traffic.xlsx") -> pd.DataFrame:
     """
     Universal entry point: tries the cross-tab format first (per-location
@@ -228,11 +241,12 @@ def parse_traffic_auto(file_obj, source_file: str = "traffic.xlsx") -> pd.DataFr
     # for multiple airports in different formats (e.g. DEL as cross-tab,
     # HYD as side-by-side Domestic/International, GOA as dom/intl PAX grid).
     all_parts = []
+    dom_intl_result = hyd_result = goa_result = None
 
     try:
         cross_tab_result = parse_cross_tab_auto(file_obj, source_file)
         if cross_tab_result is not None and not cross_tab_result.empty:
-            all_parts.append(cross_tab_result)
+            all_parts.append(cross_tab_result.assign(_reader=READER_CROSS_TAB))
     except TrafficParseError:
         pass
 
@@ -241,6 +255,7 @@ def parse_traffic_auto(file_obj, source_file: str = "traffic.xlsx") -> pd.DataFr
     try:
         dom_intl_result = _parse_all_dom_intl_sheets(file_obj)
         if dom_intl_result is not None and not dom_intl_result.empty:
+            dom_intl_result = dom_intl_result.assign(_reader=READER_DOM_INTL)
             all_parts.append(dom_intl_result)
     except TrafficParseError:
         pass
@@ -250,6 +265,7 @@ def parse_traffic_auto(file_obj, source_file: str = "traffic.xlsx") -> pd.DataFr
     try:
         hyd_result = _parse_hyd_side_by_side(file_obj)
         if hyd_result is not None and not hyd_result.empty:
+            hyd_result = hyd_result.assign(_reader=READER_SIDE_BY_SIDE)
             all_parts.append(hyd_result)
     except Exception:
         pass
@@ -259,6 +275,7 @@ def parse_traffic_auto(file_obj, source_file: str = "traffic.xlsx") -> pd.DataFr
     try:
         goa_result = _parse_goa_side_by_side(file_obj)
         if goa_result is not None and not goa_result.empty:
+            goa_result = goa_result.assign(_reader=READER_GOA_BLOCKS)
             all_parts.append(goa_result)
     except Exception:
         pass
@@ -269,9 +286,24 @@ def parse_traffic_auto(file_obj, source_file: str = "traffic.xlsx") -> pd.DataFr
     try:
         flat_result = _parse_flat_export_format(file_obj)
         if flat_result is not None and not flat_result.empty:
-            all_parts.append(flat_result)
+            all_parts.append(flat_result.assign(_reader=READER_FLAT_EXPORT))
     except Exception:
         pass
+
+    # The dedicated side-by-side readers know their airport's layout (Goa:
+    # keep only the later of the two month blocks). The generic
+    # Domestic/International reader can misread those sheets — on a Goa
+    # sheet with a daily prior-year block it adds both blocks' columns and
+    # dates them in the prior year — so it gives way for those airports.
+    if all_parts and dom_intl_result is not None and not dom_intl_result.empty:
+        owned = set()
+        for part in (hyd_result, goa_result):
+            if part is not None and not part.empty:
+                owned |= set(part["location"].astype(str))
+        if owned:
+            keep = dom_intl_result[~dom_intl_result["location"].astype(str).isin(owned)]
+            all_parts = [keep if p is dom_intl_result else p for p in all_parts]
+            all_parts = [p for p in all_parts if not p.empty]
 
     if all_parts:
         combined = pd.concat(all_parts, ignore_index=True)
@@ -284,6 +316,10 @@ def parse_traffic_auto(file_obj, source_file: str = "traffic.xlsx") -> pd.DataFr
         combined = combined.drop_duplicates(
             subset=["date", "location", "terminal", "granularity"], keep="last"
         ).reset_index(drop=True)
+        readers = _readers_by_location(combined)
+        combined = combined.drop(columns="_reader")
+        combined.attrs["skipped_sheets"] = _skipped_sheets(file_obj, combined)
+        combined.attrs["readers"] = readers
         return combined
 
     if hasattr(file_obj, "seek"):
@@ -305,7 +341,67 @@ def parse_traffic_auto(file_obj, source_file: str = "traffic.xlsx") -> pd.DataFr
 
     if hasattr(file_obj, "seek"):
         file_obj.seek(0)
-    return parse_traffic_simple(file_obj, match)
+    simple = parse_traffic_simple(file_obj, match)
+    if simple is not None and not simple.empty:
+        simple.attrs["readers"] = {str(loc): READER_SIMPLE
+                                   for loc in simple["location"].astype(str).unique()}
+    return simple
+
+
+def _readers_by_location(df: pd.DataFrame) -> dict[str, str]:
+    """{location: reader(s) that produced its rows} for the upload panel."""
+    out = {}
+    for loc, grp in df.groupby(df["location"].astype(str)):
+        out[loc] = " + ".join(sorted(set(grp["_reader"].astype(str))))
+    return out
+
+
+def _sheet_location(sheet_name: str) -> Optional[str]:
+    """Location named by a sheet's name ("Delhi", "HYD Traffic", "Vizag"), or None."""
+    key = sheet_name.strip().lower()
+    if key in _SHEET_NAME_TO_LOCATION:
+        return _SHEET_NAME_TO_LOCATION[key]
+    for pat, canon in _LOCATION_KEYWORD_PATTERNS:
+        if pat.search(sheet_name):
+            return canon
+    return None
+
+
+def _skipped_sheets(file_obj, parsed: pd.DataFrame) -> list[str]:
+    """
+    Sheets that produced no traffic rows, as messages for the upload screen,
+    so a workbook that is only partly understood is never imported silently.
+
+    A sheet named after an airport counts as skipped when no rows for that
+    airport were parsed. Sheets with no airport in their name (e.g. a flat
+    "Data" sheet with a Location column) are only listed when every parsed
+    airport is already accounted for by a named sheet.
+    """
+    if hasattr(file_obj, "seek"):
+        file_obj.seek(0)
+    try:
+        xl = pd.ExcelFile(file_obj, engine="openpyxl")
+    except Exception:
+        return []
+    found = set(parsed["location"].astype(str)) if parsed is not None and not parsed.empty else set()
+    named, unnamed = {}, []
+    for sheet in xl.sheet_names:
+        try:
+            if pd.read_excel(xl, sheet_name=sheet, header=None, nrows=5).dropna(how="all").empty:
+                continue                      # blank sheet — nothing to import
+        except Exception:
+            continue
+        loc = _sheet_location(sheet)
+        if loc:
+            named[sheet] = loc
+        else:
+            unnamed.append(sheet)
+    out = [f"Sheet '{s}' ({loc}): no traffic rows imported — layout not recognised"
+           for s, loc in named.items() if loc not in found]
+    if found and found <= set(named.values()):
+        out += [f"Sheet '{s}': not imported — no airport in the sheet name and layout not recognised"
+                for s in unnamed]
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -867,7 +963,8 @@ def _parse_flat_export_format(file_obj) -> Optional[pd.DataFrame]:
 
 def _parse_hyd_side_by_side(file_obj) -> Optional[pd.DataFrame]:
     """
-    Parse Hyderabad traffic files with the split side-by-side layout:
+    Parse Hyderabad (and Bhogapuram / Vizag) traffic files with the split
+    side-by-side layout:
       LEFT:  HYD Domestic  — DATE col, ATMs cols, PAX Arr/Dep/Total cols
       RIGHT: HYD International — DATE col, ATMs cols, PAX Arr/Dep/Total cols
 
@@ -888,7 +985,15 @@ def _parse_hyd_side_by_side(file_obj) -> Optional[pd.DataFrame]:
     except Exception:
         return None
 
-    hyd_sheets = [s for s in xl.sheet_names if 'hyd' in s.lower()]
+    # Hyderabad and Bhogapuram (Vizag) send the same layout.
+    sheet_location = {}
+    for s in xl.sheet_names:
+        low = s.lower()
+        if 'hyd' in low:
+            sheet_location[s] = 'Hyderabad'
+        elif any(k in low for k in ('vizag', 'vtz', 'bhogapuram')):
+            sheet_location[s] = 'Bhogapuram'
+    hyd_sheets = list(sheet_location)
     if not hyd_sheets:
         return None
 
@@ -943,13 +1048,16 @@ def _parse_hyd_side_by_side(file_obj) -> Optional[pd.DataFrame]:
                     ct = _classify_type_hyd(v)
                     if ct:
                         # This column and forward columns inherit this type
-                        # (forward-fill within the row)
+                        # (forward-fill within the row), up to — not
+                        # including — the column of the next type heading:
+                        # in the May-26 layout "International" sits right
+                        # above the international Departure column.
                         for _fc in range(_ci, n_cols_h):
-                            if _fc not in col_type_h:
-                                col_type_h[_fc] = ct
                             next_v = header_rows_h[_ri][_fc] if _fc < len(header_rows_h[_ri]) else None
                             if _fc > _ci and pd.notna(next_v) and isinstance(next_v, str) and _classify_type_hyd(next_v):
                                 break  # stop at next type label
+                            if _fc not in col_type_h:
+                                col_type_h[_fc] = ct
 
         # Find date col (column 0 usually has datetime values in data rows)
         for _ci in range(n_cols_h):
@@ -958,10 +1066,28 @@ def _parse_hyd_side_by_side(file_obj) -> Optional[pd.DataFrame]:
                 date_col_s = _ci
                 break
 
+        # Columns under a "Flights" / "ATMs" heading count aircraft, not
+        # passengers. Some templates put them after the PAX columns (Apr-26:
+        # PAX Arr/Dep, Flights Arr/Dep per side), so they must be skipped
+        # rather than relying on PAX coming last.
+        non_pax_cols = set()
+        for _ri in range(0, arrdep_ri):
+            _measure = None
+            for _ci in range(n_cols_h):
+                v = header_rows_h[_ri][_ci] if _ci < len(header_rows_h[_ri]) else None
+                if pd.notna(v) and isinstance(v, str) and v.replace('\xa0', '').strip():
+                    s = v.replace('\xa0', '').strip().lower()
+                    if 'flight' in s or 'atm' in s:
+                        _measure = 'other'
+                    elif 'pax' in s or _classify_type_hyd(s):
+                        _measure = None      # PAX, or a new Domestic/International block
+                if _measure == 'other':
+                    non_pax_cols.add(_ci)
+
         # Map arr/dep columns per type using arrdep_row
         for _ci in range(n_cols_h):
             _t = col_type_h.get(_ci)
-            if not _t:
+            if not _t or _ci in non_pax_cols:
                 continue
             _a = str(arrdep_row[_ci]).replace('\xa0','').strip().lower()                 if _ci < len(arrdep_row) and pd.notna(arrdep_row[_ci]) else ''
             if _a in ('arrival', 'arr', 'arr.'):
@@ -1009,7 +1135,7 @@ def _parse_hyd_side_by_side(file_obj) -> Optional[pd.DataFrame]:
                 if found:
                     records.append({
                         'date': row_date, 'period_end': pd.NaT,
-                        'granularity': 'daily', 'location': 'Hyderabad',
+                        'granularity': 'daily', 'location': sheet_location[sheet_name],
                         'terminal': type_label, 'traffic': total,
                     })
 
@@ -1578,11 +1704,13 @@ _LOCATION_KEYWORD_SCAN: list[tuple[str, str]] = [
     # "goa" before the short codes so we don't need a word-boundary for it
     # (it never appears as a substring of another word in airport context).
     ("goa", "Goa"),
+    ("bhogapuram", "Bhogapuram"), ("vizag", "Bhogapuram"),
     # Short IATA-style codes — matched as whole words to avoid e.g.
     # "DELHI" matching "del" as a prefix.
     (r"\bdel\b", "Delhi"),
     (r"\bhyd\b", "Hyderabad"),
     (r"\bgox\b", "Goa"), (r"\bgoi\b", "Goa"),
+    (r"\bvtz\b", "Bhogapuram"),
 ]
 _LOCATION_KEYWORD_PATTERNS: list[tuple[re.Pattern, str]] = [
     (re.compile(pat, re.IGNORECASE), canon)
@@ -1712,7 +1840,8 @@ def _infer_month_from_context(raw: pd.DataFrame, sheet_name: str = "") -> Option
             if parsed is not None:
                 return parsed
 
-    # 2. Title rows inside the sheet.
+    # 2. Title rows inside the sheet: a label ("May-26") or a real date
+    #    (e.g. 01-09-2026 in A1 above a Day 1..30 grid).
     for row_idx in range(min(2, len(raw))):
         for cell in raw.iloc[row_idx].tolist():
             if pd.isna(cell):
@@ -1720,6 +1849,10 @@ def _infer_month_from_context(raw: pd.DataFrame, sheet_name: str = "") -> Option
             parsed = _parse_month_label(str(cell))
             if parsed is not None:
                 return parsed
+    for row_idx in range(min(2, len(raw))):
+        for cell in raw.iloc[row_idx].tolist():
+            if isinstance(cell, (dt.datetime, dt.date)) and not pd.isna(cell):
+                return (cell.year, cell.month)
     return None
 
 
@@ -1932,15 +2065,23 @@ def _parse_cross_tab_daily(
 
 def _segment_to_terminal(segment_name: str, location: str) -> str:
     """
-    Map a cross-tab column-group label (e.g. "T3 International", "Domestic")
-    to a canonical terminal ("T1"/"T2"/"T3") for Delhi, or "" (whole-
-    airport, no real per-terminal breakdown) for Hyderabad/Goa, whose
-    "International"/"Domestic" segments are flight-type categories, not
-    physical terminals.
+    Map a cross-tab column-group label (e.g. "T3 International Dep.",
+    "Domestic Arr.") to the terminal label stored in airport_traffic.
+
+    Delhi: its physical terminal pools (T1 Dep, T3 Int Arr, …).
+    Hyderabad / Goa / Bhogapuram: "Domestic" or "International" — the same
+    labels the daily files use and terminal_mapping assigns to the lounges,
+    so their PEN % / SPP use the real split instead of an estimated share
+    of the airport total. Departure and arrival columns of one type are
+    added together by the caller. Anything else → "" (whole airport).
     """
-    if location != "Delhi":
-        return ""
     key = segment_name.strip().lower()
+    if location != "Delhi":
+        if "domestic" in key:
+            return "Domestic"
+        if "international" in key or re.search(r"\binter\b", key):
+            return "International"
+        return ""
     return _DELHI_SEGMENT_TO_TERMINAL.get(key, "")
 
 

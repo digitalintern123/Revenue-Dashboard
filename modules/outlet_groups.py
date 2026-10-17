@@ -162,13 +162,15 @@ LOCATION_DISPLAY_OVERRIDES: dict[str, dict[str, str]] = {
         "Meet & Greet (Hyderabad)":              "Atithya",
         "M&G":                                   "Atithya",
         "M&G Hyd":                               "Atithya",
-        "GAT":                                   "Atithya",
-        "GAT (Hyderabad)":                       "Atithya",
-        "Airport Lodge":                         "Atithya",
-        "Airport Lodge (Hyderabad)":             "Atithya",
         "Ceremonial(Del)  /  GA (Hyd)  /  CIP(Goa)": "Atithya",
-        "Transit Hotel":                         "Atithya",
-        "Transit Lounge":                        "Atithya",
+        # ── Own rows (Hyderabad outlet list) ────────────────────────────────
+        "GAT":                                   "GAT",
+        "GAT (Hyderabad)":                       "GAT",
+        "Airport Lodge":                         "Airport Lodge / Dormitory",
+        "Airport Lodge (Hyderabad)":             "Airport Lodge / Dormitory",
+        "Dormitory":                             "Airport Lodge / Dormitory",
+        "Transit Hotel":                         "Transit Hotel",
+        "Transit Lounge":                        "Transit Hotel",
         # ── Domestic Lounge group ───────────────────────────────────────────
         "Domestic Lounge":                       "Domestic Lounge",
         "Domestic Lounge (Hyderabad)":           "Domestic Lounge",
@@ -205,12 +207,12 @@ LOCATION_DISPLAY_OVERRIDES: dict[str, dict[str, str]] = {
         "SPA - Premium Lounge":                  "Encalm Prive",
         # ── Reserved Lounge ─────────────────────────────────────────────────
         "Reserved Lounge":                       "Reserved Lounge",
-        # ── Baggage Wrapping group ──────────────────────────────────────────
-        "Baggage Wrapping":                      "Baggage Wrapping",
-        "Baggage Wrapping (Hyd)":                "Baggage Wrapping",
-        "Baggage Wrapping (Hyderabad)":          "Baggage Wrapping",
-        "Enwrap Services":                       "Baggage Wrapping",
-        "Enwrap":                                "Baggage Wrapping",
+        # ── Baggage Wrapping group (shown as Enwrap) ────────────────────────
+        "Baggage Wrapping":                      "Enwrap",
+        "Baggage Wrapping (Hyd)":                "Enwrap",
+        "Baggage Wrapping (Hyderabad)":          "Enwrap",
+        "Enwrap Services":                       "Enwrap",
+        "Enwrap":                                "Enwrap",
         # ── Porter group ────────────────────────────────────────────────────
         "Porter":                                "Porter",
         "Porter (Hyderabad)":                    "Porter",
@@ -232,8 +234,9 @@ LOCATION_DISPLAY_OVERRIDES: dict[str, dict[str, str]] = {
         "Meet & Greet (Goa)":              "Atithya",
         "M&G Goa":                         "Atithya",
         "M&G":                             "Atithya",
-        "Ceremonial(Del)  /  GA (Hyd)  /  CIP(Goa)": "Atithya",
-        "CIP Lounge":                      "Atithya",
+        # ── CIP Lounge (own row) ────────────────────────────────────────────
+        "Ceremonial(Del)  /  GA (Hyd)  /  CIP(Goa)": "CIP Lounge",
+        "CIP Lounge":                      "CIP Lounge",
         # ── Porter group ────────────────────────────────────────────────────
         "Porter":                          "Porter",
         "Porter (Goa)":                    "Porter",
@@ -251,18 +254,39 @@ LOCATION_DISPLAY_OVERRIDES: dict[str, dict[str, str]] = {
         "International Lounge":            "International Lounge",
         "International Lounge (Goa)":      "International Lounge",
         "Goa Lounge INTL":                 "International Lounge",
-        "Reserve Lounges":                 "International Lounge",
-        "Reserved Lounge":                 "International Lounge",
         "RL Int Arrival":                  "International Lounge",
+        # ── Reserved Lounge (own row) ───────────────────────────────────────
+        "Reserve Lounges":                 "Reserved Lounge",
+        "Reserved Lounge":                 "Reserved Lounge",
         "Prive (Goa)":                     "International Lounge",
         "International Lounge (DEL INL5&6; HYD & GOA)": "International Lounge",
         "International Bar - INL5&6, Hyd & Goa":        "International Lounge",
-        # ── Baggage Wrapping group ──────────────────────────────────────────
-        "Baggage Wrapping":                "Baggage Wrapping",
-        "Baggage Wrapping (Goa)":          "Baggage Wrapping",
-        "Enwrap Services":                 "Baggage Wrapping",
-        "Enwrap":                          "Baggage Wrapping",
+        # ── Baggage Wrapping group (shown as Enwrap) ────────────────────────
+        "Baggage Wrapping":                "Enwrap",
+        "Baggage Wrapping (Goa)":          "Enwrap",
+        "Enwrap Services":                 "Enwrap",
+        "Enwrap":                          "Enwrap",
         # ── Prevent Delhi display names bleeding into Goa context ───────────
+        "Encalm Lounge (T3 DL023 &4)":    "Domestic Lounge",
+        "Encalm Lounge (T3 INT)":          "International Lounge",
+    },
+    "Bhogapuram": {
+        # Bhogapuram uses plain names; never the Delhi lounge names.
+        "Domestic Lounge":                 "Domestic Lounge",
+        "Domestic Lounge T3":              "Domestic Lounge",
+        "International Lounge":            "International Lounge",
+        "Reserved Lounge":                 "Reserved Lounge",
+        "Reserve Lounges":                 "Reserved Lounge",
+        "Meet & Greet":                    "Atithya",
+        "Welcome & Assist":                "Atithya",
+        "Baggage Wrapping":                "Enwrap",
+        "Enwrap Services":                 "Enwrap",
+        "Enwrap":                          "Enwrap",
+        "Spa Domestic":                    "Spa Domestic",
+        "SPA Domestic":                    "Spa Domestic",
+        "Domestic Spa":                    "Spa Domestic",
+        "Domestic Spa - T3":               "Spa Domestic",
+        "Dom Spa":                         "Spa Domestic",
         "Encalm Lounge (T3 DL023 &4)":    "Domestic Lounge",
         "Encalm Lounge (T3 INT)":          "International Lounge",
     },
@@ -469,10 +493,11 @@ HYD_GROUPS: dict[str, list[str]] = {
     "Atithya": [
         "Atithya", "Meet & Greet", "Welcome & Assist", "Meet and Greet",
         "Meet & Greet (Hyderabad)", "M&G", "M&G Hyd",
-        "GAT", "GAT (Hyderabad)", "Airport Lodge", "Airport Lodge (Hyderabad)",
         "Ceremonial(Del)  /  GA (Hyd)  /  CIP(Goa)",
-        "Transit Hotel", "Transit Lounge",
     ],
+    "GAT": ["GAT", "GAT (Hyderabad)"],
+    "Airport Lodge": ["Airport Lodge", "Airport Lodge (Hyderabad)", "Dormitory"],
+    "Transit Hotel": ["Transit Hotel", "Transit Lounge"],
     "Domestic Lounge": [
         "Domestic Lounge (DEL DLO2/3/4, HYD)", "Domestic Lounge",
         "Domestic Lounge T3", "Domestic Bar - DLO2/3/4, Hyd & Goa",
@@ -487,8 +512,8 @@ HYD_GROUPS: dict[str, list[str]] = {
         "Hyd Intl Lounge - Closing", "INT Card Lounge",
         "INT Card Lounge - new (Level E) - Upcoming",
         "Hyd GA Lounge", "RL Int Arrival D",
-        "Reserved Lounge",
     ],
+    "Reserved Lounge": ["Reserved Lounge", "Reserve Lounges", "Reserved Lounges"],
     "Encalm Prive": [
         "International Lounge - Premium", "Premium Lounge",
         "International Bar -  Premium Lounge",
@@ -521,6 +546,10 @@ HYD_ROW_ORDER: list[str] = [
     "International Lounge",
     "Encalm Prive",
     "Total (International + Prive)",
+    "Reserved Lounge",
+    "GAT",
+    "Airport Lodge",
+    "Transit Hotel",
     "Baggage Wrapping",
     "Porter",
     "Sky Plates",
@@ -533,8 +562,9 @@ HYD_ROW_ORDER: list[str] = [
 GOA_GROUPS: dict[str, list[str]] = {
     "Atithya": [
         "Atithya", "Meet & Greet", "Welcome & Assist", "Meet & Greet (Goa)", "M&G", "M&G Goa",
-        "Ceremonial(Del)  /  GA (Hyd)  /  CIP(Goa)", "CIP Lounge",
     ],
+    "CIP Lounge": ["CIP Lounge", "Ceremonial(Del)  /  GA (Hyd)  /  CIP(Goa)"],
+    "Reserved Lounge": ["Reserved Lounge", "Reserve Lounges", "Reserved Lounges"],
     "Porter": [
         "Porter", "Porter (Goa)", "Porter Services- T1",
     ],
@@ -547,8 +577,7 @@ GOA_GROUPS: dict[str, list[str]] = {
     "International Lounge": [
         "International Lounge (DEL INL5&6; HYD & GOA)", "International Lounge",
         "International Lounge (Goa)",
-        "International Bar - INL5&6, Hyd & Goa", "Reserve Lounges",
-        "Reserved Lounge", "CIP Lounge", "Prive (Goa)",
+        "International Bar - INL5&6, Hyd & Goa", "Prive (Goa)",
         "Goa Lounge INTL", "RL Int Arrival",
     ],
     "Baggage Wrapping": [
@@ -569,6 +598,8 @@ GOA_ROW_ORDER: list[str] = [
     "Total (Atithya + Porter)",
     "Domestic Lounge",
     "International Lounge",
+    "Reserved Lounge",
+    "CIP Lounge",
     "Baggage Wrapping",
     "Total",
 ]
@@ -585,6 +616,9 @@ BHOGAPURAM_GROUPS: dict[str, list[str]] = {
     "International Lounge": [
         "International Lounge",
     ],
+    "Reserved Lounge": [
+        "Reserved Lounge", "Reserve Lounges", "Reserved Lounges",
+    ],
     "Atithya": [
         "Atithya", "Meet & Greet", "Welcome & Assist",
     ],
@@ -594,10 +628,13 @@ BHOGAPURAM_GROUPS: dict[str, list[str]] = {
     "Baggage Wrapping": [
         "Baggage Wrapping", "Enwrap",
     ],
+    "Spa Domestic": [
+        "Spa Domestic", "SPA Domestic", "Domestic Spa", "Domestic Spa - T3", "Dom Spa",
+    ],
 }
 
 BHOGAPURAM_SUBTOTALS: list[tuple] = [
-    ("TOTAL EHPL", ["Domestic Lounge", "International Lounge",
+    ("TOTAL EHPL", ["Domestic Lounge", "International Lounge", "Reserved Lounge",
                     "Atithya", "Porter", "Baggage Wrapping"]),
 ]
 
@@ -606,9 +643,49 @@ BHOGAPURAM_ROW_ORDER: list[str] = [
     "Porter",
     "Domestic Lounge",
     "International Lounge",
+    "Reserved Lounge",
+    "Spa Domestic",
     "Baggage Wrapping",
     "TOTAL EHPL",
 ]
+
+
+# ---------------------------------------------------------------------------
+# Outlet rows that always show in a location's EHPL table, even in a period
+# with no sales ("—"), so every outlet is visible when comparing periods.
+# (group key, row name) — the location's own outlet list.
+# ---------------------------------------------------------------------------
+ALWAYS_SHOW_ROWS: dict[str, list[tuple[str, str]]] = {
+    "Hyderabad": [
+        ("Baggage Wrapping", "Enwrap"),
+        ("Atithya", "Atithya"),
+        ("Airport Lodge", "Airport Lodge / Dormitory"),
+        ("Domestic Lounge", "Domestic Lounge"),
+        ("GAT", "GAT"),
+        ("International Lounge", "International Lounge"),
+        ("Encalm Prive", "Encalm Prive"),
+        ("Reserved Lounge", "Reserved Lounge"),
+        ("Transit Hotel", "Transit Hotel"),
+    ],
+    "Goa": [
+        ("Baggage Wrapping", "Enwrap"),
+        ("Atithya", "Atithya"),
+        ("Porter", "Porter"),
+        ("CIP Lounge", "CIP Lounge"),
+        ("Domestic Lounge", "Domestic Lounge"),
+        ("International Lounge", "International Lounge"),
+        ("Reserved Lounge", "Reserved Lounge"),
+    ],
+    "Bhogapuram": [
+        ("Baggage Wrapping", "Enwrap"),
+        ("Atithya", "Atithya"),
+        ("Porter", "Porter"),
+        ("Domestic Lounge", "Domestic Lounge"),
+        ("International Lounge", "International Lounge"),
+        ("Reserved Lounge", "Reserved Lounge"),
+        ("Spa Domestic", "Spa Domestic"),
+    ],
+}
 
 
 # ---------------------------------------------------------------------------

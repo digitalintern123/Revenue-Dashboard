@@ -89,14 +89,17 @@ _SUBSIDIARY_GROUPS: frozenset[str] = frozenset({
 })
 
 HYD_SECTIONS = {
-    "LOUNGES": ["Domestic Lounge", "International Lounge", "Encalm Prive"],
+    "LOUNGES": ["Domestic Lounge", "International Lounge", "Encalm Prive",
+                "Reserved Lounge", "GAT"],
     "ATITHYA SERVICES": ["Atithya"],
     "ENWRAP": ["Baggage Wrapping"],
     "PORTER": ["Porter"],
+    "OTHERS": ["Airport Lodge", "Transit Hotel"],
 }
 
 GOA_SECTIONS = {
-    "LOUNGES":          ["Domestic Lounge", "International Lounge"],
+    "LOUNGES":          ["Domestic Lounge", "International Lounge",
+                         "Reserved Lounge", "CIP Lounge"],
     "ATITHYA SERVICES": ["Atithya"],
     "PORTER":           ["Porter"],
     "ENWRAP":           ["Baggage Wrapping"],
@@ -104,7 +107,8 @@ GOA_SECTIONS = {
 
 BHOGAPURAM_SECTIONS = {
     # Bhogapuram only has these EHPL outlets
-    "LOUNGES":          ["Domestic Lounge", "International Lounge"],
+    "LOUNGES":          ["Domestic Lounge", "International Lounge", "Reserved Lounge"],
+    "SPA":              ["Spa Domestic"],
     "ATITHYA SERVICES": ["Atithya"],
     "PORTER":           ["Porter"],
     "ENWRAP":           ["Baggage Wrapping"],
@@ -206,13 +210,10 @@ def _build_table_rows(
             section_outlets.setdefault(sec, []).append(row)
             continue
 
-        # Fallback name-based detection for older data not yet in group keys
-        if _is_bc(perf):
-            section_outlets.setdefault("OTHERS", []).append(row)
-        elif _is_rdc(perf):
-            section_outlets.setdefault("OTHERS", []).append(row)
-        elif _is_airport_lodge(perf):
-            section_outlets.setdefault("OTHERS", []).append(row)
+        # Outlets in no section (new names, outlets the layout doesn't list)
+        # still show — under OTHERS — so every line item and its revenue is
+        # in the table and the section totals add up to TOTAL EHPL.
+        section_outlets.setdefault("OTHERS", []).append(row)
 
     grand_row = next(
         (r for r in all_rows if r.get("_is_grand") and r.get("_is_subtotal")),
@@ -244,156 +245,134 @@ def _build_table_rows(
 def _get_terminal_rows(location: str, cur_df: pd.DataFrame,
                        cmp_df: "pd.DataFrame | None") -> list[dict]:
     """
-    Build terminal-wise rows by grouping outlet revenue/PAX by physical terminal,
-    then pulling traffic directly from the traffic DB for each terminal.
+    Terminal-wise rows: outlet revenue/PAX grouped by the terminal whose
+    traffic each outlet is measured against (terminal_mapping), with that
+    terminal's traffic for each period.
 
-    Physical terminals shown:
-      Delhi:     T1, T2, T3 Domestic, T3 International, T3 Arrivals
-      Hyderabad: Domestic, International
-      Goa:       Domestic
+    Rows:
+      Delhi:      T1, T2, T3 Domestic, T3 International, T3 Arrivals
+      Hyd / Goa / Bhogapuram: Domestic, International
+      every location: "Airport-wide services" (Atithya, Porter, Enwrap,
+                  Buggy — whole-airport or multi-terminal pools) and
+                  "No terminal traffic" (Business Centre, RDC, CIP Lounge …),
+                  so the TOTAL row equals the location's EHPL total.
+
+    Traffic comes from database.join_revenue_with_traffic_by_outlet (the
+    same figures as the outlet table): a terminal row's traffic is the sum
+    of the distinct pools its outlets use; the airport-wide row uses the
+    largest of its pools (the whole airport contains the others). TOTAL
+    uses the location's total traffic.
     """
     if cur_df is None or cur_df.empty:
         return []
 
+    from modules import terminal_mapping as tm
     loc_norm = location.title()
 
-    # ── Sentinel -> physical terminal(s) mapping ────────────────────────────
-    # Each sentinel maps to the physical terminal labels used in the traffic DB.
-    # These are the terminal names stored by the CLEAN traffic file.
-    SENTINEL_TO_PHYSICAL = {
-        # Delhi
-        "T1 Dep":              "T1",
-        "T1 Arr":              "T1",
-        "T2 Dep":              "T2",
-        "T2 Arr":              "T2",
-        "T3 Dom Dep":          "T3 Domestic",
-        "T3 Dom Arr":          "T3 Domestic",
-        "T3 Int Dep":          "T3 International",
-        "T3 Int Arr":          "T3 International",
-        "T3 Arr":              "T3 Arrivals",
-        "T3 Total":            "T3 Total",
-        "All":                 "All Terminals",
-        "All Dep":             "All Departures",
-        "Porter Pool":         "Porter (All Terminals)",
-        "T3 Dom+Int Dep":      "T3",
-        # Hyderabad / Goa
-        "Domestic":            "Domestic",
-        "International":       "International",
-        "Main Terminal":       "Main Terminal",
+    POOL_TO_ROW = {
+        "T1 Dep": "T1", "T1 Arr": "T1",
+        "T2 Dep": "T2", "T2 Arr": "T2",
+        "T3 Dom Dep": "T3 Domestic", "T3 Dom Arr": "T3 Domestic",
+        "T3 Int Dep": "T3 International", "T3 Int Arr": "T3 International",
+        "T3 Arr": "T3 Arrivals",
+        "Domestic": "Domestic",
+        "International": "International",
     }
+    AIRPORT_WIDE = "Airport-wide services"
+    NO_TRAFFIC = "No terminal traffic"
+    ROW_ORDER = ["T1", "T2", "T3 Domestic", "T3 International", "T3 Arrivals",
+                 "Domestic", "International", AIRPORT_WIDE, NO_TRAFFIC]
 
-    try:
-        from modules import terminal_mapping as tm
-        ot_cur = database.join_revenue_with_traffic_by_outlet(cur_df)
-        ot_cmp = database.join_revenue_with_traffic_by_outlet(cmp_df) \
-            if (cmp_df is not None and not cmp_df.empty) else pd.DataFrame()
-    except Exception:
-        return []
-
-    if ot_cur is None or ot_cur.empty:
-        return []
-
-    skip_sentinels = {"Other", "Unmapped", "", "None", "nan"}
-
-    def _physical(row):
+    def _pool(outlet: str) -> str | None:
         try:
-            sentinel = tm.get_terminal_for_outlet(str(row["outlet"]), loc_norm)
-            if not sentinel or sentinel in skip_sentinels:
-                return None
-            return SENTINEL_TO_PHYSICAL.get(sentinel, sentinel)
+            p = tm.get_terminal_for_outlet(str(outlet), loc_norm)
+        except Exception:
+            return None
+        return None if (not p or p == "Unmapped") else p
+
+    def _summarise(df) -> dict:
+        """{row: {"rev", "pax", "traffic"}} for one period."""
+        if df is None or df.empty:
+            return {}
+        try:
+            ot = database.join_revenue_with_traffic_by_outlet(df)
+        except Exception:
+            return {}
+        if ot is None or ot.empty:
+            return {}
+        ot = ot[ot["location"].astype(str).str.strip().str.title() == loc_norm].copy()
+        ot["_pool"] = ot["outlet"].map(_pool)
+        ot["_row"] = ot["_pool"].map(
+            lambda p: NO_TRAFFIC if (p is None or pd.isna(p)) else POOL_TO_ROW.get(p, AIRPORT_WIDE))
+        out: dict = {}
+        for row, grp in ot.groupby("_row"):
+            pools = (grp.dropna(subset=["traffic"]).groupby("_pool")["traffic"].first())
+            pools = pools[pools > 0]
+            if row == NO_TRAFFIC or pools.empty:
+                traffic = None
+            elif row == AIRPORT_WIDE:
+                traffic = float(pools.max())
+            else:
+                traffic = float(pools.sum())
+            out[row] = {"rev": float(grp["revenue"].sum()),
+                        "pax": float(grp["pax"].fillna(0).sum()),
+                        "traffic": traffic}
+        return out
+
+    def _location_traffic(df) -> float | None:
+        if df is None or df.empty:
+            return None
+        try:
+            lt = database.join_revenue_with_traffic(df)
+            lt = lt[lt["location"].astype(str).str.strip().str.title() == loc_norm]
+            v = pd.to_numeric(lt["traffic"], errors="coerce").dropna()
+            return float(v.iloc[0]) if not v.empty and v.iloc[0] > 0 else None
         except Exception:
             return None
 
-    ot_cur["_phys"] = ot_cur.apply(_physical, axis=1)
-    disp = ot_cur[ot_cur["_phys"].notna()].copy()
-    if disp.empty:
+    cur = _summarise(cur_df)
+    if not cur:
         return []
+    has_cmp_period = cmp_df is not None and not cmp_df.empty
+    cmp = _summarise(cmp_df) if has_cmp_period else {}
 
-    def _agg(grp):
-        rev = grp["revenue"].sum()
-        pax = grp["pax"].sum()
-        return pd.Series({"cur_rev": rev, "cur_pax": pax})
-
-    term_agg = disp.groupby("_phys").apply(_agg).reset_index()
-
-    # Compare period
-    cmp_map: dict = {}
-    if not ot_cmp.empty:
-        ot_cmp["_phys"] = ot_cmp.apply(_physical, axis=1)
-        cd = ot_cmp[ot_cmp["_phys"].notna()]
-        if not cd.empty:
-            ca = cd.groupby("_phys").apply(_agg).reset_index()
-            cmp_map = {
-                row["_phys"]: {"cmp_rev": row["cur_rev"], "cmp_pax": row["cur_pax"]}
-                for _, row in ca.iterrows()
-            }
-
-    # Get traffic directly from traffic DB by physical terminal name
-    try:
-        date_min = cur_df["date"].min()
-        date_max = cur_df["date"].max()
-        traf_df = database.load_traffic_for_date_range(date_min, date_max)
-        traf_df = traf_df[traf_df["location"].str.title() == loc_norm]
-
-        # Map physical terminal names to traffic DB terminal names
-        PHYS_TO_DB = {
-            "T1":              ["T1"],
-            "T2":              ["T2 Domestic", "T2"],
-            "T3 Domestic":     ["T3 Domestic"],
-            "T3 International":["T3 International"],
-            "T3 Arrivals":     ["T3 Domestic", "T3 International"],
-            "Domestic":        ["Domestic"],
-            "International":   ["International"],
+    def _row(label, rt, cr, cp, ct, pr, pp, pt):
+        pen_c = ra.safe_div(cp, ct) * 100 if ct else None
+        pen_p = ra.safe_div(pp, pt) * 100 if (pt and pp is not None) else None
+        spp_c = ra.safe_div(cr, ct) if ct else None
+        spp_p = ra.safe_div(pr, pt) if (pt and pr is not None) else None
+        return {
+            "Performance": label, "_row_type": rt,
+            "cur_rev": cr, "cmp_rev": pr, "rev_yoy": ra.pct_change(cr, pr),
+            "cur_pax": cp, "cmp_pax": pp, "pax_yoy": ra.pct_change(cp, pp),
+            "cur_traffic": ct, "cmp_traffic": pt, "traffic_chg": ra.pct_change(ct, pt),
+            "pen_cur": pen_c, "pen_cmp": pen_p, "pen_chg": ra.pct_change(pen_c, pen_p),
+            "spp_cur": spp_c, "spp_cmp": spp_p, "spp_chg": ra.pct_change(spp_c, spp_p),
+            "aop": None, "aop_var": None,
         }
 
-        def _get_traf(phys: str) -> float | None:
-            db_names = PHYS_TO_DB.get(phys)
-            if not db_names:
-                return None
-            total = 0.0
-            found = False
-            seen = set()
-            for db_name in db_names:
-                rows = traf_df[traf_df["terminal"] == db_name]
-                if not rows.empty and db_name not in seen:
-                    total += float(rows["traffic"].sum())
-                    found = True
-                    seen.add(db_name)
-            return total if found else None
-
-    except Exception:
-        def _get_traf(phys):
-            return None
-
     rows = []
-    for _, row in term_agg.sort_values("cur_rev", ascending=False).iterrows():
-        phys = str(row["_phys"])
-        cr   = float(row.get("cur_rev") or 0)
-        cp   = float(row.get("cur_pax") or 0)
-        ctv  = _get_traf(phys)
-        cm   = cmp_map.get(phys, {})
-        pr   = cm.get("cmp_rev")
-        pp   = cm.get("cmp_pax")
-        pen_c = ra.safe_div(cp, ctv) * 100 if ctv else None
-        pen_p = ra.safe_div(pp, ctv) * 100 if ctv and pp else None
-        spp_c = ra.safe_div(cr, ctv) if ctv else None
-        spp_p = ra.safe_div(pr, ctv) if ctv and pr else None
+    for label in ROW_ORDER:
+        if label not in cur and label not in cmp:
+            continue
+        c, p = cur.get(label, {}), cmp.get(label, {})
+        if not any((c.get("rev"), c.get("pax"), p.get("rev"), p.get("pax"))):
+            continue        # nothing in either period (e.g. a closed outlet's 0 lines)
+        rows.append(_row(
+            label, RT_TERMINAL,
+            c.get("rev", 0.0), c.get("pax", 0.0), c.get("traffic"),
+            (p.get("rev", 0.0) if has_cmp_period else None),
+            (p.get("pax", 0.0) if has_cmp_period else None),
+            p.get("traffic")))
 
-        rows.append({
-            "Performance": phys, "_row_type": RT_TERMINAL,
-            "cur_rev": cr,  "cmp_rev":  pr,
-            "rev_yoy": ra.pct_change(cr, pr),
-            "cur_pax": cp,  "cmp_pax":  pp,
-            "pax_yoy": ra.pct_change(cp, pp),
-            "cur_traffic": ctv, "cmp_traffic": ctv,
-            "traffic_chg": None,
-            "pen_cur": pen_c, "pen_cmp": pen_p,
-            "pen_chg": ra.pct_change(pen_c, pen_p),
-            "spp_cur": spp_c, "spp_cmp": spp_p,
-            "spp_chg": ra.pct_change(spp_c, spp_p),
-            "aop": None, "aop_var": None,
-        })
-    return rows
+    tot = _row(
+        "TOTAL", RT_GRAND,
+        sum(v["rev"] for v in cur.values()), sum(v["pax"] for v in cur.values()),
+        _location_traffic(cur_df),
+        sum(v["rev"] for v in cmp.values()) if has_cmp_period else None,
+        sum(v["pax"] for v in cmp.values()) if has_cmp_period else None,
+        _location_traffic(cmp_df) if has_cmp_period else None)
+    return [tot] + rows
 
 
 # ---------------------------------------------------------------------------
@@ -512,11 +491,11 @@ def _render_table(rows: list[dict], cur_label: str, cmp_label: str):
     def _row_style(row):
         rt = row_types[row.name]
         if rt == RT_GRAND:
-            s = ("font-weight: bold; background-color: #1e3a5f; "
-                 "color: white; border-top: 2px solid #0f2744;")
+            s = ("font-weight: bold; background-color: #142248; "
+                 "color: white; border-top: 2px solid #0C1530;")
         elif rt == RT_TOTAL:
-            s = ("font-weight: bold; background-color: #dbeafe; "
-                 "color: #1e40af; border-top: 1px solid #93c5fd;")
+            s = ("font-weight: bold; background-color: #F3ECE1; "
+                 "color: #142248; border-top: 1px solid #CBA578;")
         else:
             s = ""
         return [s] * len(row)
@@ -562,6 +541,10 @@ def render_ehpl_location(
         st.info(f"No EHPL data for {location} in this period.")
         return
 
+    if cmp_label == cur_label:
+        # Same period picked twice: keep the column names unique so the table renders
+        cmp_label = f"{cmp_label} (compare)"
+
     loc_norm = location.title()
     if loc_norm == "Delhi":
         sections = DELHI_SECTIONS
@@ -583,14 +566,17 @@ def render_ehpl_location(
     _render_table(table_rows, cur_label, cmp_label)
 
     # Terminal-wise — separate table
-    st.markdown("---")
-    st.markdown("#### Terminal-wise Performance")
+    st.markdown("##### Terminal-wise Performance")
     terminal_rows = _get_terminal_rows(location, cur_df, cmp_df)
     if terminal_rows:
         _render_table(terminal_rows, cur_label, cmp_label)
         st.caption(
             "PEN % = PAX / Terminal Traffic x 100.  "
-            "SPP = Revenue / Terminal Traffic."
+            "SPP = Revenue / Terminal Traffic.  "
+            "Airport-wide services = Atithya, Porter, Enwrap, Buggy (whole-airport "
+            "or multi-terminal traffic).  No terminal traffic = outlets with no "
+            "traffic pool (e.g. Business Centre, RDC, CIP Lounge).  "
+            "TOTAL traffic = the airport's total traffic."
         )
     else:
         st.info("No terminal data available for this location and period.")

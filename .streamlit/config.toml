@@ -1,6 +1,9 @@
 [server]
 maxUploadSize = 300
 maxMessageSize = 300
+headless = true
+port = 8501
+address = "0.0.0.0"
 
 [browser]
 gatherUsageStats = false
@@ -12,3 +15,14 @@ fastReruns = true
 
 [logger]
 level = "error"
+
+[client]
+# Hide the "Deploy" button and developer menu for end users.
+toolbarMode = "minimal"
+
+[theme]
+primaryColor = "#142248"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F6F3EE"
+textColor = "#1B2437"
+font = "sans serif"
