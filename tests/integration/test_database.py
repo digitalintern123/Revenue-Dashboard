@@ -419,3 +419,40 @@ def test_traffic_total_daily_rows_are_not_doubled_by_monthly():
     row = t[t["terminal"] == "Domestic"].iloc[0]
     assert row["traffic"] == 2_800.0
     assert row["missing_days"] == 0 and not row["is_estimated"]
+
+
+class TestRevenueReplace:
+    """Re-uploading a corrected revenue file with replace=True overwrites only
+    the file's own dates and locations; without it existing lines are kept."""
+
+    D1, D2 = dt.date(2025, 11, 1), dt.date(2025, 11, 2)
+
+    def _stored(self):
+        df = db.load_for_date_range(self.D1, self.D2)
+        return {(r.location, str(r.date)[:10], r.outlet): r.revenue for r in df.itertuples()}
+
+    @pytest.mark.parametrize("saver", ["save_dataframe", "save_dataframe_batched_v2"])
+    def test_replace_overwrites_only_the_files_dates_and_locations(self, saver):
+        with db.ENGINE.begin() as conn:
+            conn.execute(db.RevenueMaster.__table__.delete().where(
+                db.RevenueMaster.date.in_([self.D1, self.D2])))
+        save = getattr(db, saver)
+        save(pd.concat([
+            _revenue_df(self.D1, "International Lounge", revenue=100.0),
+            _revenue_df(self.D1, "Porter", revenue=50.0),                 # not in the new file
+            _revenue_df(self.D2, "International Lounge", revenue=70.0),   # date not in the new file
+            _revenue_df(self.D1, "International Lounge", location="Goa", revenue=30.0),
+        ]), source_file="old.xlsx")
+        new = _revenue_df(self.D1, "International Lounge", revenue=999.0)
+
+        kept = save(new, source_file="new.xlsx")                          # default: keep stored
+        assert kept["inserted"] == 0 and kept.get("replaced", 0) == 0
+        assert self._stored()[("Delhi", "2025-11-01", "International Lounge")] == 100.0
+
+        res = save(new, source_file="new.xlsx", replace=True)
+        stored = self._stored()
+        assert res["replaced"] == 2 and res["inserted"] == 1
+        assert stored[("Delhi", "2025-11-01", "International Lounge")] == 999.0
+        assert ("Delhi", "2025-11-01", "Porter") not in stored            # same date + location
+        assert stored[("Delhi", "2025-11-02", "International Lounge")] == 70.0
+        assert stored[("Goa", "2025-11-01", "International Lounge")] == 30.0

@@ -49,6 +49,9 @@ Tabs (`key="upload_tabs"`): **Daily Revenue** · **AOP Targets** · **Traffic**
 · **Database**. (The separate *Historical Import* tab was removed — Daily
 Revenue takes full workbooks too; above 5,000 rows it saves in batches.)
 
+- Daily Revenue tab: **Replace existing revenue for the dates and locations in
+  this file** (off by default; `process_uploaded_file(replace=True)`); the
+  result shows *Replaced: n earlier row(s)*.
 - File uploader → sheet selector per workbook (auto-detect option) → action
   button (rate-limited for revenue).
 - Result panel (`upload_status.render_result_from_process_result`): success /

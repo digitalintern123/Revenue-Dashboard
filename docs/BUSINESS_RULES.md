@@ -83,6 +83,13 @@ only an airport total (terminal "") fall back to a fixed share (Hyderabad
 82.7 % / 17.3 %, Goa 96.4 % / 3.6 %) marked as estimated — re-upload those
 files with *Replace* to use the real split.
 
+**Re-importing revenue:** off by default — stored lines are kept and the
+file's copy is skipped. With *Replace existing revenue for the dates and
+locations in this file* ticked, every stored row for each (location, date) in
+the file is deleted first and the file's rows saved, in one transaction per
+batch of whole dates (`database._delete_revenue_rows`); a line the file no
+longer has for such a date is removed too.
+
 **Re-importing traffic:** with *Replace* ticked (default), the stored rows for
 every airport + date in the file (all terminals, same granularity) are
 deleted first (`database._delete_traffic_rows`); otherwise existing rows are

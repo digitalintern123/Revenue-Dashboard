@@ -36,6 +36,7 @@ class ProcessResult:
     total_pax: float = 0.0
     inserted: int = 0
     skipped: int = 0
+    replaced: int = 0       # stored rows deleted first (upload with "Replace")
     warnings: list[str] = field(default_factory=list)
     # Rows not imported (or imported without a figure), with source row and
     # reason — see modules/import_report.py. Empty when everything imported.
@@ -206,9 +207,13 @@ def process_uploaded_file(
     file_name: str,
     save_to_db: bool = True,
     excel_sheet_name: Optional[str] = None,
+    replace: bool = False,
 ) -> ProcessResult:
     """
     Main entry point for processing a single uploaded file (PDF or Excel).
+
+    replace=True: stored revenue for every (location, date) in the file is
+    deleted before saving, so the file's figures replace it.
 
     For Excel files, this no longer assumes any particular sheet name or
     requires the caller to say whether the file is "the historical
@@ -450,15 +455,16 @@ def process_uploaded_file(
                 f"(revenue data was still imported normally)."
             )
 
-    inserted, skipped = 0, 0
+    inserted, skipped, replaced = 0, 0, 0
     if save_to_db:
         try:
             # Use batched save for large files (>5000 rows) to avoid
             # Neon PostgreSQL compute timeouts on free tier.
             if len(df) > 5000:
-                result = database.save_dataframe_batched_v2(df, source_file=file_name)
+                result = database.save_dataframe_batched_v2(df, source_file=file_name,
+                                                            replace=replace)
             else:
-                result = database.save_dataframe(df, source_file=file_name)
+                result = database.save_dataframe(df, source_file=file_name, replace=replace)
         except Exception as exc:
             return ProcessResult(
                 success=False,
@@ -470,9 +476,13 @@ def process_uploaded_file(
                 ),
             )
         inserted, skipped = result["inserted"], result["skipped"]
+        replaced = result.get("replaced", 0)
 
     message_parts = [f"Parsed {len(df):,} row(s) from '{file_name}'."]
     if save_to_db:
+        if replaced:
+            message_parts.append(f"{replaced:,} earlier row(s) for these dates and "
+                                 f"locations replaced.")
         message_parts.append(f"{inserted:,} new row(s) saved.")
         if skipped:
             message_parts.append(f"{skipped:,} duplicate row(s) skipped (already in database).")
@@ -488,6 +498,7 @@ def process_uploaded_file(
         total_pax=total_pax,
         inserted=inserted,
         skipped=skipped,
+        replaced=replaced,
         warnings=warnings,
         skipped_rows=skipped_report,
     )

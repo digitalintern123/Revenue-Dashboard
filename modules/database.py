@@ -1300,18 +1300,22 @@ def save_dataframe_batched_v2(
     df: pd.DataFrame,
     source_file: str,
     progress_callback=None,
+    replace: bool = False,
 ) -> dict:
     """
     Fast bulk save using PostgreSQL COPY FROM STDIN.
     Sends 50K rows in a single network call — ~5-10 seconds vs minutes.
     Falls back to chunked inserts for SQLite.
+
+    replace=True (see save_dataframe) always uses the chunked path: each
+    batch holds whole dates, and its delete and insert share a transaction.
     """
     if df.empty:
-        return {"inserted": 0, "skipped": 0, "total_rows": 0}
+        return {"inserted": 0, "skipped": 0, "total_rows": 0, "replaced": 0}
 
     total = len(df)
 
-    if _IS_POSTGRES:
+    if _IS_POSTGRES and not replace:
         import datetime as _dt
         now_str = _dt.datetime.now().isoformat(timespec="seconds")
 
@@ -1365,6 +1369,7 @@ def save_dataframe_batched_v2(
     # "duplicate" (₹5.25 Cr lost on one historical workbook).
     total_inserted = 0
     total_skipped  = 0
+    total_replaced = 0
     batch_size = _FALLBACK_BATCH_ROWS
     work = df.assign(_batch_date=pd.to_datetime(df["date"], errors="coerce")).sort_values(
         "_batch_date", kind="stable")
@@ -1381,9 +1386,10 @@ def save_dataframe_batched_v2(
     done = 0
     for days in batches:
         batch_df = work[work["_batch_date"].isin(days)].drop(columns="_batch_date")
-        result = save_dataframe(batch_df, source_file, record_upload=False)
+        result = save_dataframe(batch_df, source_file, record_upload=False, replace=replace)
         total_inserted += result["inserted"]
         total_skipped  += result["skipped"]
+        total_replaced += result.get("replaced", 0)
         done += len(batch_df)
         if progress_callback:
             progress_callback(min(done / total, 1.0), f"{total_inserted:,} saved ({done:,}/{total:,})")
@@ -1410,7 +1416,8 @@ def save_dataframe_batched_v2(
             upload_type="Revenue",
         )
 
-    return {"inserted": total_inserted, "skipped": total_skipped, "total_rows": total}
+    return {"inserted": total_inserted, "skipped": total_skipped, "total_rows": total,
+            "replaced": total_replaced}
 
 
 def _pg_copy_insert(df: pd.DataFrame, table: str, columns: list[str]) -> int:
@@ -1529,6 +1536,7 @@ def save_dataframe(
     df: pd.DataFrame,
     source_file: str,
     record_upload: bool = True,
+    replace: bool = False,
 ) -> dict:
     """
     Insert a normalized revenue DataFrame into revenue_master.
@@ -1541,10 +1549,15 @@ def save_dataframe(
     "INSERT OR IGNORE" so large historical imports (50K+ rows) complete in
     a couple of seconds rather than minutes.
 
-    Returns a dict summary: {"inserted": int, "skipped": int, "total_rows": int}
+    replace=True: stored rows for every (location, date) in the file are
+    deleted first, in the same transaction, so the file's figures replace
+    them (including lines the file no longer has for those dates).
+
+    Returns a dict summary: {"inserted": int, "skipped": int, "total_rows": int,
+    "replaced": int}
     """
     if df.empty:
-        return {"inserted": 0, "skipped": 0, "total_rows": 0}
+        return {"inserted": 0, "skipped": 0, "total_rows": 0, "replaced": 0}
 
     required_cols = {"date", "segment", "outlet", "location"}
     missing = required_cols - set(df.columns)
@@ -1635,7 +1648,10 @@ def save_dataframe(
     # 5000 rows/chunk = ~10 round trips for a 50K file vs 25 at chunk=2000.
     CHUNK = 5000
     inserted = 0
+    replaced = 0
     with ENGINE.begin() as conn:
+        if replace:
+            replaced = _delete_revenue_rows(conn, work)
         for i in range(0, len(records), CHUNK):
             chunk = records[i:i + CHUNK]
             result = conn.execute(insert_sql, chunk)
@@ -1686,7 +1702,26 @@ def save_dataframe(
             upload_type="Revenue",
         )
 
-    return {"inserted": inserted, "skipped": skipped, "total_rows": len(df)}
+    return {"inserted": inserted, "skipped": skipped, "total_rows": len(df),
+            "replaced": replaced}
+
+
+def _delete_revenue_rows(conn, work: pd.DataFrame) -> int:
+    """Delete revenue_master rows for every (location, date) in `work`
+    (location as stored, dates as ISO strings) on the open connection
+    `conn`, so the caller's insert runs in the same transaction."""
+    deleted = 0
+    for loc, grp in work.groupby("location"):
+        dates = sorted(set(grp["date"]))
+        for i in range(0, len(dates), 500):
+            result = conn.execute(
+                RevenueMaster.__table__.delete().where(
+                    (RevenueMaster.location == loc)
+                    & (RevenueMaster.date.in_([_to_date(d) for d in dates[i:i + 500]]))
+                )
+            )
+            deleted += result.rowcount or 0
+    return deleted
 
 
 def _record_upload_history(

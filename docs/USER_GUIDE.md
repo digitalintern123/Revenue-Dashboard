@@ -25,7 +25,7 @@ several sheets you can pick the sheet or leave it on auto-detect.
 
 | Tab | What to upload | Notes |
 |---|---|---|
-| **Daily Revenue** | The daily revenue report (Excel, PDF, CSV and more), or the full revenue workbook (e.g. the "Revenue Dashboard" file with the long *Data* sheet) | Usual daily upload; also loads many months at once. Lines already stored (same date, outlet, location) are kept and the file's copy is skipped. |
+| **Daily Revenue** | The daily revenue report (Excel, PDF, CSV and more), or the full revenue workbook (e.g. the "Revenue Dashboard" file with the long *Data* sheet) | Usual daily upload; also loads many months at once. By default lines already stored (same date, outlet, location) are kept and the file's copy is skipped. Tick **"Replace existing revenue for the dates and locations in this file"** to upload a **corrected** file: everything stored for each date + location in the file is replaced by the file's figures. |
 | **AOP Targets** | The AOP master workbook | Leave **"Replace existing AOP for the months in this file"** ticked so a corrected file overwrites old targets. |
 | **Traffic** | Airport traffic workbooks (.xlsx/.xls), e.g. one sheet per airport (Delhi, Hyd, Goa, Vizag) | Needed for PEN % and SPP. Leave **"Replace existing traffic for the dates and airports in this file"** ticked so a corrected file overwrites earlier figures. Any sheet that gives no rows is listed in a warning. |
 | **Database** | — | Shows what is stored. |

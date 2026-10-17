@@ -44,6 +44,13 @@ with tab_rev:
               "xml","json","png","jpg","jpeg","tiff","tif","msg"],
         accept_multiple_files=True, key="up_revenue",
     )
+    rev_replace = st.checkbox(
+        "Replace existing revenue for the dates and locations in this file",
+        value=False, key="up_revenue_replace",
+        help=("Off: lines already stored are kept and the file's copy of them is "
+              "skipped. On: everything stored for each date + location in the file "
+              "is deleted first, so a corrected file overwrites earlier figures "
+              "(a line the file no longer has for that date is removed too)."))
     daily_chosen_sheets = {}
     if uploaded_files:
         for i, f in enumerate(uploaded_files):
@@ -65,7 +72,8 @@ with tab_rev:
             with st.spinner(f"⏳ Processing {file_obj.name}…"):
                 result = data_processor.process_uploaded_file(
                     file_obj, file_obj.name, save_to_db=True,
-                    excel_sheet_name=daily_chosen_sheets.get(file_obj.name))
+                    excel_sheet_name=daily_chosen_sheets.get(file_obj.name),
+                    replace=rev_replace)
             pending.append((file_obj.name, result))
             if result.success:
                 any_success = True
@@ -82,6 +90,9 @@ with tab_rev:
     if "_up_revenue_results" in st.session_state:
         for file_name, result in st.session_state["_up_revenue_results"]:
             date_line = [f"**Report date:** {result.report_date}"] if result.success and result.report_date else []
+            if result.success and result.replaced:
+                date_line.append(f"**Replaced:** {result.replaced:,} earlier row(s) for the "
+                                 f"dates and locations in this file")
             upload_status.render_result_from_process_result(
                 result, extra_lines=date_line, expected_format=upload_status.FORMAT_DAILY_REPORT)
             if result.success and result.df is not None:
