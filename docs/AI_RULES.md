@@ -7,7 +7,7 @@ because breaking it caused a real bug.
 
 ## A. Before and after every change
 
-1. **Run the tests:** `python -m pytest tests -q` → **285 passed**. Never
+1. **Run the tests:** `python -m pytest tests -q` → **290 passed**. Never
    skip, disable or loosen a test to make it pass.
 2. **Check the running app** for UI changes (`streamlit run Home.py`, sign in,
    open the page you touched) — tests do not render pages.
@@ -79,7 +79,9 @@ because breaking it caused a real bug.
 25. **Never commit secrets:** `.streamlit/secrets.toml`, database URLs with
     passwords, API keys. Passwords are stored only as PBKDF2 hashes
     (`create_secrets.py`).
-26. Server-only files (`data/`, `start_app.bat`, `backups/`, `logs/`) are not
+26. **Server settings files** `alert_webhook.txt`, `backup_offsite.txt`,
+    `deploy_source.txt` are git-ignored; never commit them.
+27. Server-only files (`data/`, `start_app.bat`, `backups/`, `logs/`) are not
     in git; updates must not touch them (`deploy_sync.ps1` only fast-forwards
     tracked files).
 

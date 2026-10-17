@@ -56,7 +56,7 @@ Open http://localhost:8501 and sign in.
   `secrets.toml`) to use PostgreSQL instead.
 - **Logins:** `.streamlit/secrets.toml` (`[auth.users]`, `[auth.admins]`) —
   never commit it; `.streamlit/secrets.toml.example` shows the format.
-- **Tests:** `python -m pytest tests -q` (285 tests).
+- **Tests:** `python -m pytest tests -q` (290 tests).
 
 ## Project layout
 
@@ -66,9 +66,11 @@ views/                   the five pages (Uploads, Previous_Uploads, EHPL, Encalm
 modules/                 parsers, database, dashboards, UI helpers (see docs/PROJECT_CONTEXT.md)
 assets/                  logos and Lucide icons
 tests/                   unit, integration and smoke tests
-watchdog.ps1             Windows: restarts the app if it stops; runs deploy_sync.ps1
+watchdog.ps1             Windows: restarts the app if it stops; runs deploy_sync.ps1; backup age check
 deploy_sync.ps1          Windows: applies updates pulled by Plesk Git, restarts the app
-backup_db.ps1            Windows: database backup script (see the runbook)
+backup_db.ps1            Windows: daily SQLite backup, checked and copied off the server
+notify.ps1               Windows: alerts to a Teams/Slack webhook (see the runbook)
+scripts/backup_sqlite.py backup + integrity check + off-server copy; --verify = restore test
 deploy/                  Linux alternative (systemd, nginx) — not used on the current server
 scripts/migrate_to_sqlite.py   one-off copy from PostgreSQL to SQLite
 render.yaml              Render blueprint (optional test hosting)

@@ -20,6 +20,8 @@ $TaskName = "EncalmAnalytics"
 $Port     = 8501
 $LogFile  = Join-Path $AppDir "logs\deploy.log"
 
+. (Join-Path $PSScriptRoot "notify.ps1")
+
 function Write-Log($msg) {
     $dir = Split-Path $LogFile
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir | Out-Null }
@@ -55,7 +57,11 @@ $branch = (Invoke-Git rev-parse --abbrev-ref HEAD).Out
 $before = (Invoke-Git rev-parse HEAD).Out
 
 $fetch = Invoke-Git fetch --quiet $Source $branch
-if ($fetch.Code -ne 0) { Write-Log "fetch from $Source ($branch) failed: $($fetch.Out)"; exit 1 }
+if ($fetch.Code -ne 0) {
+    Write-Log "fetch from $Source ($branch) failed: $($fetch.Out)"
+    Send-EncalmAlert -Title "Update check failed" -Text "git fetch ($branch): $($fetch.Out)" -Key "deploy-fetch"
+    exit 1
+}
 $new = (Invoke-Git rev-parse FETCH_HEAD).Out
 if ($new -eq $before) { exit 0 }                             # nothing new
 
@@ -63,6 +69,8 @@ $changed = (Invoke-Git diff --name-only $before $new).Out
 $merge = Invoke-Git merge --ff-only FETCH_HEAD
 if ($merge.Code -ne 0) {
     Write-Log "update to $new not applied (local changes in the way?): $($merge.Out)"
+    Send-EncalmAlert -Title "Update NOT applied" `
+        -Text "New commits on $branch could not be applied: $($merge.Out)" -Key "deploy-merge"
     exit 1
 }
 Write-Log "updated $($before.Substring(0,7)) -> $($new.Substring(0,7)) on $branch"
@@ -83,4 +91,6 @@ if (Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyCon
     Write-Log "app restarted on port $Port"
 } else {
     Write-Log "WARNING: app not listening on port $Port after restart"
+    Send-EncalmAlert -Title "App did not start after update" `
+        -Text "Updated to $($new.Substring(0,7)) on $branch but nothing listens on port $Port." -Key "deploy-restart"
 }

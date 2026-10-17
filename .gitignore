@@ -26,3 +26,8 @@ Thumbs.db
 
 # Database backups
 backups/
+
+# Server-only settings (secrets / per-server paths) - never commit
+alert_webhook.txt
+backup_offsite.txt
+deploy_source.txt

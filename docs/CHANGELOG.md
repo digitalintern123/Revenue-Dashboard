@@ -7,6 +7,18 @@ names and file paths in them may no longer exist).
 
 ## Version 2.7.0 (October 2026) — every line item, Windows server operations
 
+### Production readiness
+- **Replace option for revenue uploads** (off by default): a corrected file
+  replaces what is stored for its dates and locations (e.g. the Sep-26 file's
+  29 Feb 2024 / 31 May 2026 corrections).
+- **Backups:** `backup_db.ps1` is now a SQLite backup (was a PostgreSQL script
+  with a password) — checked after each run and copied off the server;
+  `scripts/backup_sqlite.py --verify` is the restore test.
+- **Alerts** (`notify.ps1`, Teams/Slack webhook): app down or restarted,
+  backup failed or older than 26 hours, update not applied.
+- No password left in tracked files; server-only settings files are
+  git-ignored. The server is to follow `main` (runbook §2c).
+
 ### Terminal-wise Performance
 - Traffic, PEN % and SPP were blank for every location (traffic was looked up
   with text dates and old terminal names, and the error was hidden). The

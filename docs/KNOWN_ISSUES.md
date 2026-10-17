@@ -52,10 +52,15 @@ date; choose the DSR month in the filter.
 
 ## Server
 
-### ISSUE-015 — `backup_db.ps1` in git is a PostgreSQL script with a hard-coded password
-The live server uses SQLite and its own local `backup_db.ps1`. Remove the
-password from the git version (read it from an environment variable) and
-change it wherever it was used.
+### ISSUE-015 — passwords in git history (fixed in code; rotation pending)
+`backup_db.ps1` is now the SQLite backup and no tracked file holds a password,
+but older commits contain `Encalm@2026`. Change it and the other exposed
+credentials — see SERVER_RUNBOOK §5 *Passwords that were in git*.
+
+### ISSUE-016 — library versions are not pinned
+`requirements.txt` gives minimum versions only, so a reinstall can pull a
+newer major version. Pin them to the versions installed on the server
+(`python -m pip freeze`) once confirmed.
 
 ---
 
