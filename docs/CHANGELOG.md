@@ -7,6 +7,22 @@ names and file paths in them may no longer exist).
 
 ## Version 2.7.0 (October 2026) — every line item, Windows server operations
 
+### Smarter uploads: identify, check, learn
+- **Analyse → Save** on every upload point (revenue, AOP, traffic, DSR): the
+  app shows what it found in each sheet (layout, reader, confidence, rows,
+  dates) and runs checks before anything is saved.
+- **Checks** (warnings only): revenue reconciled with the file; new outlets
+  with likely spellings; what would change vs stored; copied days; PAX
+  without revenue; unusual revenue per PAX; traffic copied/unusual days and
+  month vs the stored earlier month; AOP months already stored; DSR records
+  already stored and grand-total check. On the real files they found: Sep-26
+  4 Apr 2026 = 5 Apr 2026 for every outlet; Reserved Lounge Delhi PAX with no
+  revenue; Delhi traffic 13 Apr = 5 Apr; Hyderabad 17 Sep low.
+- **New layouts:** *Teach the app this layout* maps the columns once (the
+  app's guess and confidence pre-filled); *Remember this layout* saves it
+  (`parse_template`) and the same layout is read automatically next time.
+- Fixed while testing: ISO dates in column headers were read day-first.
+
 ### Production readiness
 - **Replace option for revenue uploads** (off by default): a corrected file
   replaces what is stored for its dates and locations (e.g. the Sep-26 file's

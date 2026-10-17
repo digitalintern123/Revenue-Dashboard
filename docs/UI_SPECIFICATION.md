@@ -52,8 +52,19 @@ Revenue takes full workbooks too; above 5,000 rows it saves in batches.)
 - Daily Revenue tab: **Replace existing revenue for the dates and locations in
   this file** (off by default; `process_uploaded_file(replace=True)`); the
   result shows *Replaced: n earlier row(s)*.
-- File uploader → sheet selector per workbook (auto-detect option) → action
-  button (rate-limited for revenue).
+- File uploader → sheet selector per workbook (auto-detect option) →
+  **🔍 Analyse** → analysis panel (`modules/analyse_panel.py`: confidence,
+  sheet-by-sheet identification from `format_registry`, checks from
+  `upload_checks`, preview) → **💾 Save** / **✖️ Cancel**. The same flow on
+  every upload point, including Encalm Eats → Upload DSR. Analyses are cached
+  (`st.cache_data`, 4 entries, 30 min) so Save reuses them; session state
+  holds only file names, sheets and confirmed column mappings.
+- Revenue / Traffic: **🧩 Teach the app this layout** (`modules/mapping_editor.py`)
+  when the file is not read with confidence: sheet, header row, a
+  `st.data_editor` of column roles, values for missing fields, *Read with
+  this mapping*, then *Remember this layout* on Save.
+- Database tab: **Saved layouts** table; admins (`[auth.admins]`) can delete.
+- Revenue saving is rate-limited (on Save).
 - Result panel (`upload_status.render_result_from_process_result`): success /
   failure, rows saved, warnings, and the **rows not imported** expander
   (summary by reason, table with Excel row, CSV download).

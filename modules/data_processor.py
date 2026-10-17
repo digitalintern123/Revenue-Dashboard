@@ -546,6 +546,29 @@ def _finish_revenue(
     )
 
 
+def process_mapped_rows(df: pd.DataFrame, file_name: str, layout_label: str,
+                        confidence: Optional[float], details: Optional[list] = None,
+                        source_sheet: Optional[str] = None) -> ProcessResult:
+    """Rows built from a user-confirmed or saved column mapping
+    (modules/layout_learning.py) -> the same validation as every other
+    revenue file, not saved (save with save_analysed)."""
+    warnings: list[str] = []
+    df, skipped_report = _validate_and_clean_with_report(df)
+    if not skipped_report.empty:
+        warnings.append(
+            f"{len(skipped_report):,} row(s) were not imported or imported incompletely — "
+            "see the 'Rows not imported' table for the Excel row and reason.")
+    if df.empty:
+        return ProcessResult(success=False, file_name=file_name, stage="validating",
+                             skipped_rows=skipped_report, layout=layout_label,
+                             message=(f"With this column mapping no usable revenue rows remain "
+                                      f"in '{file_name}' — check the roles and the header row."))
+    return _finish_revenue(df, file_name, warnings, skipped_report, save_to_db=False,
+                           replace=False,
+                           layout=dict(layout=layout_label, confidence=confidence,
+                                       source_sheet=source_sheet, details=details or []))
+
+
 def save_analysed(result: ProcessResult, replace: bool = False) -> ProcessResult:
     """Save a revenue file that was already parsed with save_to_db=False
     (the upload "Analyse" step), without reading the file again."""

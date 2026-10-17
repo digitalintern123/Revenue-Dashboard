@@ -14,7 +14,7 @@ A Streamlit web app for Encalm Group's airport businesses.
   1.60), pandas, SQLAlchemy 2, Plotly, openpyxl / pdfplumber
 - **Database:** SQLite by default (`data/revenue_analytics.db`), PostgreSQL
   when `DATABASE_URL` is set
-- **Tests:** 290 (`python -m pytest tests -q`)
+- **Tests:** 308 (`python -m pytest tests -q`)
 - **Live:** Windows VPS behind IIS — see [SERVER_RUNBOOK.md](SERVER_RUNBOOK.md)
 
 ## 2. Business context
@@ -89,6 +89,10 @@ served by Streamlit's file-based routing, unstyled.
 | `comparison_widget.py`, `date_picker.py`, `date_utils.py` | Compare-by selector, date dropdowns, date helpers | dashboards |
 | `charts.py`, `table_style.py`, `formatting.py`, `ui.py` | Plotly charts, table colours, Indian number format, branding/CSS/icons | dashboards, pages |
 | `upload_status.py`, `app_logger.py` | Upload result panels; error logging / `safe_run` | Uploads, dashboards |
+| `format_registry.py` | What is in an uploaded file, sheet by sheet: layout, reader, confidence, rows, dates, result | Uploads, Encalm Eats |
+| `upload_checks.py` | Checks before saving: reconcile, new outlets, changes vs stored, copied days, anomalies | Uploads, Encalm Eats |
+| `analyse_panel.py` | The Analyse panel (confidence, identification, checks, preview) | Uploads, Encalm Eats |
+| `layout_learning.py`, `mapping_editor.py` | Unknown layouts: propose column roles, apply a confirmed mapping, saved layouts (`parse_template`) | Uploads |
 | `insights.py`, `segment_tree_view.py`, `lounge_capacity.py` | From the earlier multi-page version; not used by the current pages | — |
 
 ## 5. Data flow
@@ -121,4 +125,4 @@ served by Streamlit's file-based routing, unstyled.
 
 `tests/unit` (parsers, KPI maths, EHPL line items, rows-not-imported, auth),
 `tests/integration` (database), `tests/smoke` (every module imports).
-`conftest.py` mocks Streamlit where needed. All 290 must pass before pushing.
+`conftest.py` mocks Streamlit where needed. All 308 must pass before pushing.

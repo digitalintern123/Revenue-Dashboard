@@ -21,7 +21,9 @@ import io as _io
 from modules.session import set_active_date
 from modules.cached_db import clear_data_cache
 from modules.app_logger import safe_run
-from modules import analyse_panel, format_registry, upload_checks
+from modules import analyse_panel, format_registry, upload_checks, layout_learning, mapping_editor
+import json
+import pandas as pd
 
 # ── Rate limit helper ─────────────────────────────────────────────────────────
 def _check_rate_limit():
@@ -29,13 +31,93 @@ def _check_rate_limit():
 
 
 # ── Analyse step (cached briefly so Save reuses it without re-reading) ──────
+SAVED_LAYOUT = "Saved layout: "
+
+
+def _is_admin() -> bool:
+    """Users listed in [auth.admins] admins = [...] in secrets.toml."""
+    try:
+        admins = st.secrets.get("auth", {}).get("admins", {}).get("admins", [])
+    except Exception:
+        admins = []
+    return (_current_user() or "") in set(admins or [])
+
+
+def _templates_json(kind: str) -> str:
+    try:
+        return json.dumps(database.list_parse_templates(kind))
+    except Exception:
+        return "[]"
+
+
+def _needs_mapping(res) -> bool:
+    """Not read, or read only by the generic readers with low confidence."""
+    if not res.success:
+        return True
+    if res.layout == data_processor.LAYOUT_GENERIC:
+        return True
+    return res.layout.startswith(data_processor.LAYOUT_UNIVERSAL) and (res.confidence or 0) < 0.8
+
+
+def _remember_layout(kind: str, name: str, state: dict, file_bytes: bytes, file_name: str):
+    grid = layout_learning.read_grid(file_bytes, file_name, state.get("sheet"))
+    headers, _ = layout_learning.table_at(grid, state["header_row"])
+    mapping = pd.DataFrame(state["mapping"])
+    database.save_parse_template(
+        kind, name, layout_learning.fingerprint(headers), layout_learning.mapping_to_saved(mapping),
+        state["header_row"], state.get("constants") or {}, created_by=_current_user() or "")
+
+
+def _mark_template_used(kind: str, layout_label: str):
+    name = layout_label[len(SAVED_LAYOUT):].rsplit(" (", 1)[0]
+    for t in database.list_parse_templates(kind):
+        if t["name"] == name:
+            database.mark_parse_template_used(t["id"])
+
+
 @st.cache_data(max_entries=4, ttl=1800, show_spinner=False)
-def _analyse_revenue(file_bytes: bytes, name: str, sheet):
+def _analyse_revenue(file_bytes: bytes, name: str, sheet, templates_json: str):
+    """Known layouts first; a saved layout when only the generic readers
+    managed (or nothing did). Returns (result, ident, analysis, needs_mapping)."""
     res = data_processor.process_uploaded_file(_io.BytesIO(file_bytes), name,
                                                save_to_db=False, excel_sheet_name=sheet)
+    if _needs_mapping(res):
+        hit = layout_learning.find_template(file_bytes, name, json.loads(templates_json), sheet)
+        if hit:
+            t = hit["template"]
+            mapping = layout_learning.mapping_for_headers(t["mapping"], hit["headers"], "revenue")
+            try:
+                rows = layout_learning.apply(hit["headers"], hit["data"], mapping, "revenue",
+                                             t["constants"], hit["header_row"])
+                mapped = data_processor.process_mapped_rows(
+                    rows, name, f"{SAVED_LAYOUT}{t['name']} ({hit['score']:.0%} of headers match)",
+                    hit["score"], source_sheet=hit["sheet"])
+                if mapped.success:
+                    res = mapped
+            except layout_learning.LayoutError:
+                pass
     an = upload_checks.analyse_revenue(res, file_bytes)
     ident = format_registry.identify_revenue(file_bytes, name, res, an.confidence)
-    return res, ident, an
+    return res, ident, an, _needs_mapping(res)
+
+
+@st.cache_data(max_entries=4, ttl=1800, show_spinner=False)
+def _analyse_revenue_mapped(file_bytes: bytes, name: str, state_json: str):
+    """A revenue file read with the column mapping the user confirmed."""
+    state = json.loads(state_json)
+    try:
+        grid = layout_learning.read_grid(file_bytes, name, state.get("sheet"))
+        headers, data = layout_learning.table_at(grid, state["header_row"])
+        rows = layout_learning.apply(headers, data, pd.DataFrame(state["mapping"]), "revenue",
+                                     state.get("constants"), state["header_row"])
+    except layout_learning.LayoutError as exc:
+        return None, None, None, str(exc)
+    res = data_processor.process_mapped_rows(rows, name, "Column mapping confirmed by you", 1.0,
+                                             source_sheet=state.get("sheet"))
+    an = upload_checks.analyse_revenue(res, file_bytes)
+    an.confidence = 1.0 if res.success else None
+    ident = format_registry.identify_revenue(file_bytes, name, res, an.confidence)
+    return res, ident, an, None
 
 
 @st.cache_data(max_entries=4, ttl=1800, show_spinner=False)
@@ -57,15 +139,54 @@ def _analyse_aop(file_bytes: bytes, name: str, sheet):
 
 
 @st.cache_data(max_entries=4, ttl=1800, show_spinner=False)
-def _analyse_traffic(file_bytes: bytes, name: str):
+def _analyse_traffic(file_bytes: bytes, name: str, templates_json: str = "[]"):
+    """Known traffic layouts first, then a saved layout. Returns
+    (df, ident, analysis, error)."""
     from modules import traffic_parser
+    df, err = None, None
     try:
         df = traffic_parser.parse_traffic_auto(_io.BytesIO(file_bytes), name)
     except Exception as exc:
-        return None, None, None, str(exc)
+        err = str(exc)
+    if df is None or df.empty:
+        hit = layout_learning.find_template(file_bytes, name, json.loads(templates_json))
+        if hit:
+            t = hit["template"]
+            mapping = layout_learning.mapping_for_headers(t["mapping"], hit["headers"], "traffic")
+            try:
+                df = layout_learning.apply(hit["headers"], hit["data"], mapping, "traffic",
+                                           t["constants"], hit["header_row"])
+                df.attrs["readers"] = {str(l): f"{SAVED_LAYOUT}{t['name']}"
+                                       for l in df["location"].astype(str).unique()}
+                err = None
+            except layout_learning.LayoutError as exc:
+                err = f"Saved layout '{t['name']}' matched but could not be applied: {exc}"
+    if df is None or df.empty:
+        return None, None, None, err or "No traffic rows found."
     an = upload_checks.analyse_traffic(df)
     ident = format_registry.identify_traffic(file_bytes, name, df, an.confidence)
     return df, ident, an, None
+
+
+@st.cache_data(max_entries=4, ttl=1800, show_spinner=False)
+def _analyse_traffic_mapped(file_bytes: bytes, name: str, state_json: str):
+    state = json.loads(state_json)
+    try:
+        grid = layout_learning.read_grid(file_bytes, name, state.get("sheet"))
+        headers, data = layout_learning.table_at(grid, state["header_row"])
+        df = layout_learning.apply(headers, data, pd.DataFrame(state["mapping"]), "traffic",
+                                   state.get("constants"), state["header_row"])
+    except layout_learning.LayoutError as exc:
+        return None, None, None, str(exc)
+    if df.empty:
+        return None, None, None, "With this mapping no traffic rows remain."
+    df.attrs["readers"] = {str(l): "Column mapping confirmed by you"
+                           for l in df["location"].astype(str).unique()}
+    an = upload_checks.analyse_traffic(df)
+    an.confidence = 1.0
+    ident = format_registry.identify_traffic(file_bytes, name, df, an.confidence)
+    return df, ident, an, None
+
 
 tab_rev, tab_aop, tab_traffic, tab_db = st.tabs(
     ["Daily Revenue", "AOP Targets", "Traffic", "Database"],
@@ -109,21 +230,41 @@ with tab_rev:
 
     _rev_pending = st.session_state.get("_up_rev_pending") or []
     _rev_files = {f.name: f for f in (uploaded_files or [])}
-    _rev_ready = []
+    _rev_ready = []                    # (name, sheet, mapping-state json or None)
+    _rev_templates = _templates_json("revenue") if _rev_pending else "[]"
     for _i, (_name, _sheet) in enumerate(_rev_pending):
         _f = _rev_files.get(_name)
         if _f is None:
             continue                       # file removed from the uploader
+        _bytes = _f.getvalue()
+        _state = mapping_editor.get_state("revenue", _name)
+        _sj = mapping_editor.state_json(_state) if _state else None
         with st.spinner(f"🔍 Analysing {_name}…"):
-            _res, _ident, _an = _analyse_revenue(_f.getvalue(), _name, _sheet)
-        if _res.success:
+            if _sj:
+                _res, _ident, _an, _err = _analyse_revenue_mapped(_bytes, _name, _sj)
+                _needs = True
+            else:
+                _res, _ident, _an, _needs = _analyse_revenue(_bytes, _name, _sheet, _rev_templates)
+                _err = None
+        if _err:
+            st.error(f"**{_name}** — {_err}")
+        elif _res.success:
             analyse_panel.render(_name, _ident, _an, preview=_res.df, key=f"rev{_i}")
-            _rev_ready.append((_name, _sheet))
+            _rev_ready.append((_name, _sheet, _sj))
+            if _res.skipped_rows is not None and not _res.skipped_rows.empty:
+                upload_status.render_skipped_rows(_res.skipped_rows, _name)
         else:
             upload_status.render_result_from_process_result(
                 _res, expected_format=upload_status.FORMAT_DAILY_REPORT)
-        if _res.success and _res.skipped_rows is not None and not _res.skipped_rows.empty:
-            upload_status.render_skipped_rows(_res.skipped_rows, _name)
+        if _needs:
+            mapping_editor.render("revenue", _bytes, _name, key=f"revmap{_i}",
+                                  default_sheet=_sheet or (_res.source_sheet if _res else None),
+                                  expanded=bool(_err) or _res is None or not _res.success)
+    _rev_remember = {}
+    for _name, _sheet, _sj in _rev_ready:
+        if _sj:
+            st.markdown(f"**{_name}** — save this column mapping for next time?")
+            _rev_remember[_name] = mapping_editor.remember_inputs("revenue", _name, f"revrem_{_name}")
     if _rev_pending:
         _c1, _c2 = st.columns([1, 4])
         _save = _c1.button("💾 Save", type="primary", disabled=not _rev_ready, key="up_rev_save")
@@ -136,21 +277,32 @@ with tab_rev:
                 st.error(f"🚫 {_msg}")
                 st.stop()
             any_success, latest_date, pending = False, None, []
-            for _name, _sheet in _rev_ready:
-                _res, _, _ = _analyse_revenue(_rev_files[_name].getvalue(), _name, _sheet)
+            for _name, _sheet, _sj in _rev_ready:
+                _bytes = _rev_files[_name].getvalue()
+                if _sj:
+                    _res = _analyse_revenue_mapped(_bytes, _name, _sj)[0]
+                else:
+                    _res = _analyse_revenue(_bytes, _name, _sheet, _rev_templates)[0]
                 with st.spinner(f"💾 Saving {_name}…"):
                     result = data_processor.save_analysed(_res, replace=rev_replace)
+                if result.success and _sj and _rev_remember.get(_name):
+                    _remember_layout("revenue", _rev_remember[_name], json.loads(_sj), _bytes, _name)
+                    result.warnings.append(f"Layout remembered as '{_rev_remember[_name]}'.")
+                if result.success and _res.layout.startswith(SAVED_LAYOUT):
+                    _mark_template_used("revenue", _res.layout)
                 result.df = None           # keep session state small (AI_RULES 17)
                 pending.append((_name, result))
                 if result.success:
                     any_success = True
                     if result.report_date and (latest_date is None or result.report_date > latest_date):
                         latest_date = result.report_date
+                st.session_state.pop(mapping_editor.state_key("revenue", _name), None)
             if latest_date:
                 set_active_date(latest_date)
             st.session_state["_up_revenue_results"] = pending
             st.session_state.pop("_up_rev_pending", None)
             _analyse_revenue.clear()
+            _analyse_revenue_mapped.clear()
             if any_success:
                 clear_data_cache()
                 st.toast("Saved.", icon="✅")
@@ -374,19 +526,33 @@ with tab_traffic:
 
     _t_pending = st.session_state.get("_up_traffic_pending") or []
     _t_files = {f.name: f for f in (traffic_files or [])}
-    _t_ready = []
+    _t_ready = []                      # (name, mapping-state json or None)
+    _t_templates = _templates_json("traffic") if _t_pending else "[]"
     for _i, _name in enumerate(_t_pending):
         _f = _t_files.get(_name)
         if _f is None:
             continue
+        _bytes = _f.getvalue()
+        _state = mapping_editor.get_state("traffic", _name)
+        _sj = mapping_editor.state_json(_state) if _state else None
         with st.spinner(f"🔍 Analysing {_name}…"):
-            _df, _ident, _an, _err = _analyse_traffic(_f.getvalue(), _name)
+            if _sj:
+                _df, _ident, _an, _err = _analyse_traffic_mapped(_bytes, _name, _sj)
+            else:
+                _df, _ident, _an, _err = _analyse_traffic(_bytes, _name, _t_templates)
         if _err:
             upload_status.render_result(False, _name, _err, stage="reading",
                                         expected_format=upload_status.FORMAT_TRAFFIC)
-            continue
-        analyse_panel.render(_name, _ident, _an, preview=_df, key=f"tr{_i}")
-        _t_ready.append(_name)
+        else:
+            analyse_panel.render(_name, _ident, _an, preview=_df, key=f"tr{_i}")
+            _t_ready.append((_name, _sj))
+        if _err or _sj:
+            mapping_editor.render("traffic", _bytes, _name, key=f"trmap{_i}", expanded=bool(_err))
+    _t_remember = {}
+    for _name, _sj in _t_ready:
+        if _sj:
+            st.markdown(f"**{_name}** — save this column mapping for next time?")
+            _t_remember[_name] = mapping_editor.remember_inputs("traffic", _name, f"trrem_{_name}")
     if _t_pending:
         _c1, _c2 = st.columns([1, 4])
         _save = _c1.button("💾 Save", type="primary", disabled=not _t_ready, key="up_traffic_save")
@@ -395,11 +561,18 @@ with tab_traffic:
             st.rerun()
         if _save:
             pending_t = []
-            for _name in _t_ready:
-                _parsed, _, _, _ = _analyse_traffic(_t_files[_name].getvalue(), _name)
+            for _name, _sj in _t_ready:
+                _bytes = _t_files[_name].getvalue()
+                _parsed = (_analyse_traffic_mapped(_bytes, _name, _sj) if _sj
+                           else _analyse_traffic(_bytes, _name, _t_templates))[0]
                 try:
                     with st.spinner(f"💾 Saving {_name}…"):
                         _sr = database.save_traffic_dataframe(_parsed, _name, replace=traffic_replace)
+                    if _sj and _t_remember.get(_name):
+                        _remember_layout("traffic", _t_remember[_name], json.loads(_sj), _bytes, _name)
+                    for _r in set((_parsed.attrs.get("readers") or {}).values()):
+                        if _r.startswith(SAVED_LAYOUT):
+                            _mark_template_used("traffic", _r)
                     pending_t.append({"success": True, "file_name": _name,
                         "inserted": _sr["inserted"], "skipped": _sr["skipped"],
                         "rows_parsed": len(_parsed),
@@ -408,9 +581,11 @@ with tab_traffic:
                 except Exception as _exc2:
                     pending_t.append({"success": False, "file_name": _name,
                         "message": str(_exc2), "stage": "saving"})
+                st.session_state.pop(mapping_editor.state_key("traffic", _name), None)
             st.session_state["_up_traffic_results"] = pending_t
             st.session_state.pop("_up_traffic_pending", None)
             _analyse_traffic.clear()
+            _analyse_traffic_mapped.clear()
             clear_data_cache()  # new data must show on every page immediately
             st.rerun()
 
@@ -442,3 +617,27 @@ with tab_db:
         m2.metric("Distinct Dates", f"{stats['distinct_dates']:,}")
         m3.metric("Earliest", str(stats["min_date"]) if stats["min_date"] else "—")
         m4.metric("Latest", str(stats["max_date"]) if stats["max_date"] else "—")
+
+    # Saved layouts: files the app learned to read from a confirmed mapping
+    with safe_run("Saved layouts", error_type="db_error"):
+        st.markdown("##### Saved layouts")
+        _layouts = database.list_parse_templates()
+        if not _layouts:
+            st.caption("None yet. When the app cannot read a file's layout, map its columns "
+                       "once under **Teach the app this layout**; ticking *Remember this "
+                       "layout* saves it here and the same layout is read automatically "
+                       "next time.")
+        else:
+            st.dataframe(pd.DataFrame([{
+                "Name": t["name"], "For": t["kind"].title(),
+                "Columns recognised": ", ".join(t["fingerprint"][:8])
+                                      + (" …" if len(t["fingerprint"]) > 8 else ""),
+                "Created by": t["created_by"] or "", "Created": (t["created_at"] or "")[:10],
+                "Used": t["times_used"], "Last used": (t["last_used"] or "")[:10],
+            } for t in _layouts]), use_container_width=True, hide_index=True)
+            if _is_admin():
+                _del = st.selectbox("Delete a saved layout", ["—"] + [
+                    f"{t['id']}: {t['name']} ({t['kind']})" for t in _layouts], key="up_tpl_del")
+                if _del != "—" and st.button("🗑️ Delete", key="up_tpl_del_btn"):
+                    database.delete_parse_template(int(_del.split(":", 1)[0]))
+                    st.rerun()

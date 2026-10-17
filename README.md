@@ -56,7 +56,7 @@ Open http://localhost:8501 and sign in.
   `secrets.toml`) to use PostgreSQL instead.
 - **Logins:** `.streamlit/secrets.toml` (`[auth.users]`, `[auth.admins]`) —
   never commit it; `.streamlit/secrets.toml.example` shows the format.
-- **Tests:** `python -m pytest tests -q` (290 tests).
+- **Tests:** `python -m pytest tests -q` (308 tests).
 
 ## Project layout
 

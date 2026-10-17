@@ -212,7 +212,23 @@ outlet name (as stored by the DSR parser) and re-import the AOP master with
 
 ---
 
-## 7. Adding a new EHPL outlet
+## 7. Recognising a file — layout registry
+
+`format_registry` reports, sheet by sheet, which reader handled the file:
+
+| Upload | Layouts recognised (first match wins) |
+|---|---|
+| Revenue | Encalm PDF report · long table (Date / Location / Business / Outlet / PAX / Revenue — `LAYOUT_LONG`) · stacked daily blocks · wide pivot · simple table · auto-detected (`universal_parser`, with its confidence) · **saved layout** (only when nothing better than the generic readers matched) |
+| Traffic | Terminal × Dep./Arr. grid · Domestic/International × PAX/Flights grid · Hyderabad/Vizag side by side · Goa two month blocks · flat export · simple table · saved layout |
+| AOP | AOP master outlet × month · daily outlet pivot · daily total per location (+ Sky Plates / Encalm Eats from the master) |
+| DSR | one sheet per day (DD-MM-YYYY) with outlet rows |
+
+Confidence: 100 % when the revenue long table reconciles exactly with the
+file; 95 % for the dedicated readers; the auto-detected reader's own score;
+saved layout = share of headers matched. Below 80 % the upload screen offers
+*Teach the app this layout* (`layout_learning`, `mapping_editor`).
+
+## 8. Adding a new EHPL outlet
 
 1. `modules/database.py` — add its spellings to `_OUTLET_NAME_CANONICAL`
    (and `_CANONICAL_OUTLET_TO_BU` if the business unit is not Lounges).

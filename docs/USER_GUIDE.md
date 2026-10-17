@@ -33,6 +33,54 @@ several sheets you can pick the sheet or leave it on auto-detect.
 The **Encalm Eats DSR** (Master DSR and Starbucks & McD files) is uploaded on
 the **Encalm Eats** page → **Upload DSR** tab.
 
+### Analyse, then Save
+
+Every upload works in two steps. Nothing is saved until you press **Save**.
+
+1. Choose the file(s) and press **🔍 Analyse**. A panel shows:
+   - **Confidence** — how sure the app is that it read the file correctly
+     (100 % for the revenue workbook when every figure is accounted for).
+   - **What the app found in the file** — every sheet, the layout recognised
+     (e.g. *Revenue workbook — long table*, *Hyderabad side-by-side, PAX only*),
+     the rows and dates it gave, and whether it is imported, not used, empty or
+     not recognised. No sheet is skipped without being listed.
+   - **Checks before saving** (they never change the data — the file is
+     always stored as it is):
+
+     | Check | Upload | What it means |
+     |---|---|---|
+     | Every figure in the file is accounted for | Revenue | File total = imported + "rows not imported". A gap means do not save. |
+     | Outlets never seen before | Revenue | New names, with a stored name they may be a misspelling of |
+     | Stored lines with different figures | Revenue, Traffic | How many stored lines this file would change — tick **Replace** if it is the corrected file |
+     | Dates with identical figures | Revenue, Traffic | A day copied by mistake in the file (e.g. 4 = 5 Apr 2026) |
+     | PAX but no revenue | Revenue | An outlet with PAX and 0 revenue on several days |
+     | Unusual revenue per PAX / unusual traffic days | Revenue, Traffic | Far from the usual value — a typo or a genuine one-off |
+     | Month changed by more than 40 % | Traffic | Against the stored earlier month — e.g. a column read as the wrong terminal |
+     | Months already stored | AOP | Replaced if **Replace** is ticked |
+     | Records already stored, unknown outlets, grand total | DSR | |
+2. Read the warnings, correct the file if needed, then press **💾 Save**
+   (or **✖️ Cancel**).
+
+### A file in a new layout: "Teach the app this layout"
+
+If the app cannot read a revenue or traffic file with confidence, the panel
+shows **🧩 Teach the app this layout**:
+
+1. Pick the sheet and the row that holds the column headers.
+2. Check the **Role** of every column — the app's guess and its confidence
+   are filled in. Revenue: Date, Location, Business, Outlet, PAX, Revenue,
+   AOP, or *Revenue/PAX (date in header)* for a sheet with one column per day.
+   Traffic: Date, Location, Terminal, Traffic (columns with the same
+   *Terminal* label are added, e.g. Domestic arrivals + departures).
+3. Type a value for anything the file has no column for (e.g. Location: Goa).
+4. Press **Read with this mapping** — the normal checks run on the result.
+5. Keep **Remember this layout** ticked and give it a name, then **Save**.
+   The next file with the same headers (at least 90 % of them) is read
+   automatically and shown as *Saved layout: <name>*.
+
+Saved layouts are listed under **Upload Data → Database**; admins can delete
+one there.
+
 ### After a revenue upload: "rows not imported"
 
 The result panel says how many rows were saved. If any line of the file was

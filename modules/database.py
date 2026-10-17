@@ -552,6 +552,84 @@ class EncalmEatsDSR(Base):
     )
 
 
+class ParseTemplate(Base):
+    """
+    A "saved layout": a file layout the app did not know, whose columns a
+    user mapped once on the upload screen (modules/layout_learning.py).
+    The next upload whose headers match `fingerprint` is read with
+    `mapping` automatically. kind = "revenue" | "traffic".
+    """
+    __tablename__ = "parse_template"
+
+    id          = Column(Integer, primary_key=True, autoincrement=True)
+    kind        = Column(String, nullable=False)
+    name        = Column(String, nullable=False)
+    fingerprint = Column(String, nullable=False)   # JSON list of normalised headers
+    mapping     = Column(String, nullable=False)   # JSON (layout_learning.mapping_to_saved)
+    header_row  = Column(Integer, nullable=False, default=0)
+    constants   = Column(String, nullable=False, default="{}")   # JSON
+    created_by  = Column(String, nullable=True)
+    created_at  = Column(String, nullable=False, default="")
+    last_used   = Column(String, nullable=True)
+    times_used  = Column(Integer, nullable=False, default=0)
+
+    __table_args__ = (UniqueConstraint("kind", "name", name="uq_parse_template_kind_name"),)
+
+
+def save_parse_template(kind: str, name: str, fingerprint: list, mapping: dict,
+                        header_row: int, constants: dict, created_by: str = "") -> int:
+    """Store (or overwrite, same kind + name) a saved layout. Returns its id."""
+    import json
+    now = dt.datetime.now().isoformat(timespec="seconds")
+    with SessionLocal() as session:
+        row = session.execute(select(ParseTemplate).where(
+            ParseTemplate.kind == kind, ParseTemplate.name == name)).scalar_one_or_none()
+        if row is None:
+            row = ParseTemplate(kind=kind, name=name, created_at=now, times_used=0)
+            session.add(row)
+        row.fingerprint = json.dumps(fingerprint)
+        row.mapping = json.dumps(mapping)
+        row.header_row = int(header_row)
+        row.constants = json.dumps(constants or {})
+        row.created_by = created_by
+        session.commit()
+        return row.id
+
+
+def list_parse_templates(kind: Optional[str] = None) -> list[dict]:
+    """Saved layouts as dicts (JSON fields decoded), newest first."""
+    import json
+    with SessionLocal() as session:
+        q = select(ParseTemplate).order_by(ParseTemplate.id.desc())
+        if kind:
+            q = q.where(ParseTemplate.kind == kind)
+        rows = session.execute(q).scalars().all()
+        return [{"id": r.id, "kind": r.kind, "name": r.name,
+                 "fingerprint": json.loads(r.fingerprint), "mapping": json.loads(r.mapping),
+                 "header_row": r.header_row, "constants": json.loads(r.constants or "{}"),
+                 "created_by": r.created_by, "created_at": r.created_at,
+                 "last_used": r.last_used, "times_used": r.times_used} for r in rows]
+
+
+def mark_parse_template_used(template_id: int) -> None:
+    with SessionLocal() as session:
+        row = session.get(ParseTemplate, template_id)
+        if row is not None:
+            row.times_used = (row.times_used or 0) + 1
+            row.last_used = dt.datetime.now().isoformat(timespec="seconds")
+            session.commit()
+
+
+def delete_parse_template(template_id: int) -> bool:
+    with SessionLocal() as session:
+        row = session.get(ParseTemplate, template_id)
+        if row is None:
+            return False
+        session.delete(row)
+        session.commit()
+        return True
+
+
 def save_encalm_eats_dsr(
     records: list,  # list of DSRRecord dataclass instances
     source_file: str = "",

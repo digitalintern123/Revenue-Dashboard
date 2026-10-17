@@ -456,3 +456,56 @@ class TestRevenueReplace:
         assert ("Delhi", "2025-11-01", "Porter") not in stored            # same date + location
         assert stored[("Delhi", "2025-11-02", "International Lounge")] == 70.0
         assert stored[("Goa", "2025-11-01", "International Lounge")] == 30.0
+
+
+class TestSavedLayouts:
+    """A mapping confirmed once is stored (parse_template), recognised in the
+    next file with the same headers, and read through the normal validation."""
+
+    @staticmethod
+    def _file(rename_last=False):
+        import openpyxl
+        from io import BytesIO
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.append(["Ops report"])
+        ws.append(["Txn Dt", "Airport", "Unit", "Business Line", "Guests",
+                   "Notes" if rename_last else "Sales (INR)"])
+        for d, o in ((1, "Domestic Lounge"), (2, "Porter")):
+            ws.append([dt.date(2026, 3, d), "GOX", o, "Lounges", 10 * d, 1000 * d])
+        buf = BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+
+    def test_save_find_apply_and_delete(self):
+        from modules import data_processor
+        from modules import layout_learning as ll
+        data = self._file()
+        grid = ll.read_grid(data, "ops.xlsx")
+        hr = ll.guess_header_row(grid)
+        headers, rows = ll.table_at(grid, hr)
+        mapping = ll.propose(headers, rows, "revenue")
+        mapping.loc[mapping["Column"] == "Unit", "Role"] = ll.R_OUTLET
+        mapping.loc[mapping["Column"] == "Business Line", "Role"] = ll.R_BUSINESS
+        tid = db.save_parse_template("revenue", "Goa ops", ll.fingerprint(headers),
+                                     ll.mapping_to_saved(mapping), hr, {}, created_by="t")
+        db.save_parse_template("revenue", "Goa ops", ll.fingerprint(headers),
+                               ll.mapping_to_saved(mapping), hr, {})      # same name: overwrite
+        saved = [t for t in db.list_parse_templates("revenue") if t["name"] == "Goa ops"]
+        assert len(saved) == 1 and saved[0]["id"] == tid
+
+        hit = ll.find_template(data, "ops-next-week.xlsx", saved)
+        assert hit is not None and hit["score"] == 1.0
+        again = ll.mapping_for_headers(saved[0]["mapping"], hit["headers"], "revenue")
+        out = ll.apply(hit["headers"], hit["data"], again, "revenue", {}, hit["header_row"])
+        res = data_processor.process_mapped_rows(out, "ops.xlsx", "Saved layout: Goa ops", 1.0)
+        assert res.success and res.total_revenue == 3000 and set(res.df["location"]) == {"Goa"}
+
+        # One renamed column of six still matches (5/6 < 0.9 does not)
+        assert ll.find_template(self._file(rename_last=True), "x.xlsx", saved) is None
+        assert ll.find_template(self._file(rename_last=True), "x.xlsx", saved,
+                                min_score=0.8) is not None
+
+        db.mark_parse_template_used(tid)
+        assert db.list_parse_templates("revenue")[0]["times_used"] >= 1
+        assert db.delete_parse_template(tid) and not db.list_parse_templates("revenue")

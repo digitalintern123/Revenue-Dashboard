@@ -7,7 +7,7 @@ because breaking it caused a real bug.
 
 ## A. Before and after every change
 
-1. **Run the tests:** `python -m pytest tests -q` → **290 passed**. Never
+1. **Run the tests:** `python -m pytest tests -q` → **308 passed**. Never
    skip, disable or loosen a test to make it pass.
 2. **Check the running app** for UI changes (`streamlit run Home.py`, sign in,
    open the page you touched) — tests do not render pages.
@@ -32,7 +32,7 @@ because breaking it caused a real bug.
    counts every stored outlet exactly once; never go back to looking up
    revenue through lists of alias names (that dropped and double-counted
    outlets). To place or rename an outlet, change `outlet_groups.py` /
-   `ehpl_layout.py` ([DATA_MAPPINGS.md](DATA_MAPPINGS.md) §7).
+   `ehpl_layout.py` ([DATA_MAPPINGS.md](DATA_MAPPINGS.md) §8).
 8. **Grand totals = every row.** Never compute a location total from a fixed
    list of groups.
 9. **New outlet spellings** go into `database._OUTLET_NAME_CANONICAL`, plus

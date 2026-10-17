@@ -76,6 +76,15 @@ file_name, report_date, row_count, total_revenue, primary_total, total_pax,
 uploaded_at, status, upload_type (Revenue / AOP / Traffic), uploaded_by.
 Index (uploaded_by, uploaded_at) for the upload rate limit.
 
+### `parse_template` — saved layouts
+
+kind (revenue / traffic), name (unique per kind), fingerprint (JSON list of
+normalised headers), mapping (JSON: header → role, terminal; role for date
+headers), header_row, constants (JSON), created_by, created_at, last_used,
+times_used. Written when a user confirms a column mapping and ticks
+*Remember this layout* (`database.save_parse_template`); matched by
+`layout_learning.find_template` (≥ 90 % of headers in common).
+
 ### `login_attempts`
 
 username, attempt_at — failed sign-ins for the lockout.
