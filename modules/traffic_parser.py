@@ -219,6 +219,15 @@ def parse_traffic_simple(file_obj, match: dict) -> pd.DataFrame:
     return out
 
 
+# Reader names shown on the upload "Analyse" panel (df.attrs["readers"])
+READER_CROSS_TAB = "Terminal × Dep./Arr. grid (daily or monthly)"
+READER_DOM_INTL = "Domestic / International × PAX / Flights grid"
+READER_SIDE_BY_SIDE = "Domestic | International side by side (PAX only, Flights ignored)"
+READER_GOA_BLOCKS = "Two month blocks side by side (latest month kept)"
+READER_FLAT_EXPORT = "Flat export (DOM_ARR_PAX … columns)"
+READER_SIMPLE = "Simple table (Date, Location, Traffic)"
+
+
 def parse_traffic_auto(file_obj, source_file: str = "traffic.xlsx") -> pd.DataFrame:
     """
     Universal entry point: tries the cross-tab format first (per-location
@@ -237,7 +246,7 @@ def parse_traffic_auto(file_obj, source_file: str = "traffic.xlsx") -> pd.DataFr
     try:
         cross_tab_result = parse_cross_tab_auto(file_obj, source_file)
         if cross_tab_result is not None and not cross_tab_result.empty:
-            all_parts.append(cross_tab_result)
+            all_parts.append(cross_tab_result.assign(_reader=READER_CROSS_TAB))
     except TrafficParseError:
         pass
 
@@ -246,6 +255,7 @@ def parse_traffic_auto(file_obj, source_file: str = "traffic.xlsx") -> pd.DataFr
     try:
         dom_intl_result = _parse_all_dom_intl_sheets(file_obj)
         if dom_intl_result is not None and not dom_intl_result.empty:
+            dom_intl_result = dom_intl_result.assign(_reader=READER_DOM_INTL)
             all_parts.append(dom_intl_result)
     except TrafficParseError:
         pass
@@ -255,6 +265,7 @@ def parse_traffic_auto(file_obj, source_file: str = "traffic.xlsx") -> pd.DataFr
     try:
         hyd_result = _parse_hyd_side_by_side(file_obj)
         if hyd_result is not None and not hyd_result.empty:
+            hyd_result = hyd_result.assign(_reader=READER_SIDE_BY_SIDE)
             all_parts.append(hyd_result)
     except Exception:
         pass
@@ -264,6 +275,7 @@ def parse_traffic_auto(file_obj, source_file: str = "traffic.xlsx") -> pd.DataFr
     try:
         goa_result = _parse_goa_side_by_side(file_obj)
         if goa_result is not None and not goa_result.empty:
+            goa_result = goa_result.assign(_reader=READER_GOA_BLOCKS)
             all_parts.append(goa_result)
     except Exception:
         pass
@@ -274,7 +286,7 @@ def parse_traffic_auto(file_obj, source_file: str = "traffic.xlsx") -> pd.DataFr
     try:
         flat_result = _parse_flat_export_format(file_obj)
         if flat_result is not None and not flat_result.empty:
-            all_parts.append(flat_result)
+            all_parts.append(flat_result.assign(_reader=READER_FLAT_EXPORT))
     except Exception:
         pass
 
@@ -304,7 +316,10 @@ def parse_traffic_auto(file_obj, source_file: str = "traffic.xlsx") -> pd.DataFr
         combined = combined.drop_duplicates(
             subset=["date", "location", "terminal", "granularity"], keep="last"
         ).reset_index(drop=True)
+        readers = _readers_by_location(combined)
+        combined = combined.drop(columns="_reader")
         combined.attrs["skipped_sheets"] = _skipped_sheets(file_obj, combined)
+        combined.attrs["readers"] = readers
         return combined
 
     if hasattr(file_obj, "seek"):
@@ -326,7 +341,19 @@ def parse_traffic_auto(file_obj, source_file: str = "traffic.xlsx") -> pd.DataFr
 
     if hasattr(file_obj, "seek"):
         file_obj.seek(0)
-    return parse_traffic_simple(file_obj, match)
+    simple = parse_traffic_simple(file_obj, match)
+    if simple is not None and not simple.empty:
+        simple.attrs["readers"] = {str(loc): READER_SIMPLE
+                                   for loc in simple["location"].astype(str).unique()}
+    return simple
+
+
+def _readers_by_location(df: pd.DataFrame) -> dict[str, str]:
+    """{location: reader(s) that produced its rows} for the upload panel."""
+    out = {}
+    for loc, grp in df.groupby(df["location"].astype(str)):
+        out[loc] = " + ".join(sorted(set(grp["_reader"].astype(str))))
+    return out
 
 
 def _sheet_location(sheet_name: str) -> Optional[str]:

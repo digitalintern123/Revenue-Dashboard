@@ -1853,6 +1853,29 @@ def _to_float_or_none(value):
 # Reading data
 # ---------------------------------------------------------------------------
 
+def get_stored_outlets() -> pd.DataFrame:
+    """Every (location, outlet) stored in revenue_master with its last date —
+    used by the upload checks to spot outlets never seen before."""
+    return _read_sql(text(
+        "SELECT location, outlet, MAX(date) AS last_date FROM revenue_master "
+        "GROUP BY location, outlet"))
+
+
+def normalise_revenue_keys(df: pd.DataFrame) -> pd.DataFrame:
+    """The (date, location, outlet) keys and figures exactly as save_dataframe
+    would store them (canonical outlet names, title-case location, same-key
+    lines added together) — for comparing a parsed file with stored data."""
+    if df is None or df.empty:
+        return pd.DataFrame(columns=["date", "location", "outlet", "pax", "revenue"])
+    work = df[["date", "location", "outlet", "pax", "revenue"]].copy()
+    work["outlet"] = work["outlet"].astype(str).str.strip().map(canonicalize_outlet_name)
+    work["location"] = work["location"].astype(str).str.strip().str.title()
+    work["date"] = pd.to_datetime(work["date"]).dt.strftime("%Y-%m-%d")
+    for c in ("pax", "revenue"):
+        work[c] = pd.to_numeric(work[c], errors="coerce")
+    return combine_duplicate_revenue_rows(work, ["date", "outlet", "location"])
+
+
 def load_all() -> pd.DataFrame:
     """Load the entire revenue_master table as a DataFrame."""
     return _read_sql(select(RevenueMaster))

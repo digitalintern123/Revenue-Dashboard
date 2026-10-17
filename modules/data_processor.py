@@ -37,10 +37,25 @@ class ProcessResult:
     inserted: int = 0
     skipped: int = 0
     replaced: int = 0       # stored rows deleted first (upload with "Replace")
+    # Which layout read the file — shown by the upload "Analyse" panel
+    # (modules/format_registry.py). confidence is 0..1, None = not scored.
+    layout: str = ""
+    confidence: Optional[float] = None
+    source_sheet: Optional[str] = None
+    header_row_idx: Optional[int] = None    # 0-based row of the column headers
+    layout_details: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     # Rows not imported (or imported without a figure), with source row and
     # reason — see modules/import_report.py. Empty when everything imported.
     skipped_rows: Optional[pd.DataFrame] = None
+
+
+# Layout names shown on the upload "Analyse" panel
+LAYOUT_LONG = "Revenue workbook — long table (Date, Location, Business, Outlet, PAX, Revenue)"
+LAYOUT_STACKED = "Revenue — stacked daily blocks"
+LAYOUT_PIVOT = "Revenue — wide pivot (PAX / Revenue pairs per outlet)"
+LAYOUT_GENERIC = "Revenue — simple table (columns matched by name)"
+LAYOUT_UNIVERSAL = "Auto-detected table"
 
 
 def detect_file_type(file_name: str) -> str:
@@ -244,6 +259,7 @@ def process_uploaded_file(
 
     file_type = detect_file_type(file_name)
     warnings: list[str] = []
+    layout: dict = {}
 
     # ── Early traffic detection ─────────────────────────────────────────────
     # If the file's first row contains columns like DOM_ARR_PAX / INT_ARR_PAX,
@@ -296,6 +312,7 @@ def process_uploaded_file(
     try:
         if file_type == "pdf":
             df = pdf_parser.parse_pdf(file_obj, source_file=file_name)
+            layout = dict(layout="Encalm daily report (PDF)")
             discrepancies = _safe_cross_validate(df, file_obj)
             if discrepancies:
                 warnings.append(
@@ -325,6 +342,8 @@ def process_uploaded_file(
                     df = excel_parser.parse_revenue_dashboard(
                         file_obj, sheet_name=excel_sheet_name, header_row_idx=long_match["header_row_idx"]
                     )
+                    layout = dict(layout=LAYOUT_LONG, source_sheet=excel_sheet_name,
+                                  header_row_idx=long_match["header_row_idx"])
 
                 if df is None:
                     try:
@@ -337,6 +356,7 @@ def process_uploaded_file(
                         if hasattr(file_obj, "seek"):
                             file_obj.seek(0)
                         df = excel_parser.parse_stacked_daily_blocks(file_obj, stacked_match)
+                        layout = dict(layout=LAYOUT_STACKED, source_sheet=excel_sheet_name)
 
                 if df is None:
                     try:
@@ -352,13 +372,15 @@ def process_uploaded_file(
                         if hasattr(file_obj, "seek"):
                             file_obj.seek(0)
                         df = excel_parser.parse_wide_pivot_sheet(file_obj, matching_pivot)
+                        layout = dict(layout=LAYOUT_PIVOT, source_sheet=excel_sheet_name)
 
                 if df is None:
                     if hasattr(file_obj, "seek"):
                         file_obj.seek(0)
                     df = excel_parser.parse_generic_excel(file_obj, sheet_name=excel_sheet_name)
+                    layout = dict(layout=LAYOUT_GENERIC, source_sheet=excel_sheet_name)
             else:
-                df, detected_description = _parse_excel_with_detection(file_obj)
+                df, detected_description, layout = _parse_excel_with_detection(file_obj)
                 if detected_description:
                     warnings.append(f"Detected and used {detected_description} for revenue data.")
         else:
@@ -404,6 +426,21 @@ def process_uploaded_file(
             ),
         )
 
+    return _finish_revenue(df, file_name, warnings, skipped_report,
+                           save_to_db=save_to_db, replace=replace, layout=layout)
+
+
+def _finish_revenue(
+    df: pd.DataFrame,
+    file_name: str,
+    warnings: list[str],
+    skipped_report: pd.DataFrame,
+    save_to_db: bool,
+    replace: bool,
+    layout: dict,
+) -> ProcessResult:
+    """Validated revenue rows -> totals, embedded AOP, save (if asked) and
+    the ProcessResult. Shared by process_uploaded_file and save_analysed."""
     # Latest date in the file (a multi-day workbook's first row can be any day).
     report_date = max(df["date"]) if "date" in df.columns and not df.empty else None
     total_revenue = float(pd.to_numeric(df["revenue"], errors="coerce").sum())
@@ -500,8 +537,27 @@ def process_uploaded_file(
         skipped=skipped,
         replaced=replaced,
         warnings=warnings,
+        layout=layout.get("layout", ""),
+        confidence=layout.get("confidence"),
+        source_sheet=layout.get("source_sheet"),
+        header_row_idx=layout.get("header_row_idx"),
+        layout_details=layout.get("details", []),
         skipped_rows=skipped_report,
     )
+
+
+def save_analysed(result: ProcessResult, replace: bool = False) -> ProcessResult:
+    """Save a revenue file that was already parsed with save_to_db=False
+    (the upload "Analyse" step), without reading the file again."""
+    if not result.success or result.df is None or result.df.empty:
+        return result
+    layout = dict(layout=result.layout, confidence=result.confidence,
+                  source_sheet=result.source_sheet, header_row_idx=result.header_row_idx,
+                  details=list(result.layout_details))
+    warnings = [w for w in result.warnings]
+    skipped = result.skipped_rows if result.skipped_rows is not None else pd.DataFrame()
+    return _finish_revenue(result.df.copy(), result.file_name, warnings, skipped,
+                           save_to_db=True, replace=replace, layout=layout)
 
 
 def process_uploaded_file_auto(
@@ -986,10 +1042,13 @@ def _process_with_universal(
         skipped=skipped,
         warnings=warnings,
         skipped_rows=skipped_report,
+        layout=f"{LAYOUT_UNIVERSAL} ({parsed.source_description})",
+        confidence=parsed.confidence,
+        layout_details=parsed.report_lines(),
     )
 
 
-def _parse_excel_with_detection(file_obj) -> tuple[pd.DataFrame, Optional[str]]:
+def _parse_excel_with_detection(file_obj) -> tuple[pd.DataFrame, Optional[str], dict]:
     """
     Try, in order:
       1. A long-format sheet anywhere in the workbook (any sheet name).
@@ -1007,7 +1066,9 @@ def _parse_excel_with_detection(file_obj) -> tuple[pd.DataFrame, Optional[str]]:
          resort for a small ad-hoc spreadsheet without a perfectly clean
          header row.
 
-    Returns (dataframe, description_of_what_was_detected_or_None).
+    Returns (dataframe, description_of_what_was_detected_or_None, layout)
+    where layout = {"layout", "source_sheet", "header_row_idx"} for the
+    upload "Analyse" panel.
     """
     try:
         long_match = excel_parser.detect_long_format_sheet(file_obj)
@@ -1021,7 +1082,9 @@ def _parse_excel_with_detection(file_obj) -> tuple[pd.DataFrame, Optional[str]]:
         df = excel_parser.parse_revenue_dashboard(
             file_obj, sheet_name=long_match["sheet_name"], header_row_idx=long_match["header_row_idx"]
         )
-        return df, f"long-format sheet '{long_match['sheet_name']}'"
+        return df, f"long-format sheet '{long_match['sheet_name']}'", dict(
+            layout=LAYOUT_LONG, source_sheet=long_match["sheet_name"],
+            header_row_idx=long_match["header_row_idx"])
 
     if hasattr(file_obj, "seek"):
         file_obj.seek(0)
@@ -1034,7 +1097,8 @@ def _parse_excel_with_detection(file_obj) -> tuple[pd.DataFrame, Optional[str]]:
         if hasattr(file_obj, "seek"):
             file_obj.seek(0)
         df = excel_parser.parse_stacked_daily_blocks(file_obj, stacked_match)
-        return df, f"stacked daily blocks sheet '{stacked_match['sheet_name']}'"
+        return df, f"stacked daily blocks sheet '{stacked_match['sheet_name']}'", dict(
+            layout=LAYOUT_STACKED, source_sheet=stacked_match["sheet_name"])
 
     if hasattr(file_obj, "seek"):
         file_obj.seek(0)
@@ -1072,12 +1136,13 @@ def _parse_excel_with_detection(file_obj) -> tuple[pd.DataFrame, Optional[str]]:
                     f" ({dropped_count:,} row(s) that appeared in more than one sheet for the "
                     "same date/outlet were de-duplicated)"
                 )
-            return combined, description
+            return combined, description, dict(
+                layout=LAYOUT_PIVOT, source_sheet=", ".join(sheet_names_used))
 
     if hasattr(file_obj, "seek"):
         file_obj.seek(0)
     df = excel_parser.parse_generic_excel(file_obj)
-    return df, None
+    return df, None, dict(layout=LAYOUT_GENERIC)
 
 
 def _safe_cross_validate(df: pd.DataFrame, file_obj) -> Optional[dict]:

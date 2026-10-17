@@ -21,10 +21,51 @@ import io as _io
 from modules.session import set_active_date
 from modules.cached_db import clear_data_cache
 from modules.app_logger import safe_run
+from modules import analyse_panel, format_registry, upload_checks
 
 # ── Rate limit helper ─────────────────────────────────────────────────────────
 def _check_rate_limit():
     return database.check_upload_rate_limit(_current_user() or "")
+
+
+# ── Analyse step (cached briefly so Save reuses it without re-reading) ──────
+@st.cache_data(max_entries=4, ttl=1800, show_spinner=False)
+def _analyse_revenue(file_bytes: bytes, name: str, sheet):
+    res = data_processor.process_uploaded_file(_io.BytesIO(file_bytes), name,
+                                               save_to_db=False, excel_sheet_name=sheet)
+    an = upload_checks.analyse_revenue(res, file_bytes)
+    ident = format_registry.identify_revenue(file_bytes, name, res, an.confidence)
+    return res, ident, an
+
+
+@st.cache_data(max_entries=4, ttl=1800, show_spinner=False)
+def _analyse_aop(file_bytes: bytes, name: str, sheet):
+    from modules import aop_parser
+    from modules import eats_skyplates_aop_parser as esp_parser
+    try:
+        parsed = aop_parser.parse_aop_auto(_io.BytesIO(file_bytes), sheet_name=sheet)
+    except Exception as exc:
+        return None, None, str(exc)
+    esp = None
+    if parsed["format"] == "outlet_monthly":
+        try:
+            esp = esp_parser.parse_eats_and_skyplates_aop(_io.BytesIO(file_bytes))
+        except Exception:
+            esp = None
+    an = upload_checks.analyse_aop(parsed, esp, database.get_available_aop_year_months())
+    return format_registry.identify_aop(file_bytes, name, parsed), an, None
+
+
+@st.cache_data(max_entries=4, ttl=1800, show_spinner=False)
+def _analyse_traffic(file_bytes: bytes, name: str):
+    from modules import traffic_parser
+    try:
+        df = traffic_parser.parse_traffic_auto(_io.BytesIO(file_bytes), name)
+    except Exception as exc:
+        return None, None, None, str(exc)
+    an = upload_checks.analyse_traffic(df)
+    ident = format_registry.identify_traffic(file_bytes, name, df, an.confidence)
+    return df, ident, an, None
 
 tab_rev, tab_aop, tab_traffic, tab_db = st.tabs(
     ["Daily Revenue", "AOP Targets", "Traffic", "Database"],
@@ -60,32 +101,60 @@ with tab_rev:
                 daily_chosen_sheets[f.name] = upload_status.render_sheet_selector(
                     f.name, sheet_names, key_prefix=f"up_daily_{i}", allow_auto_detect=True)
 
-    if st.button("🚀 Process & Analyze", type="primary", disabled=not uploaded_files):
-        _ok, _msg = _check_rate_limit()
-        if not _ok:
-            st.error(f"🚫 {_msg}")
-            st.stop()
-        any_success = False
-        latest_date = None
-        pending = []
-        for file_obj in uploaded_files:
-            with st.spinner(f"⏳ Processing {file_obj.name}…"):
-                result = data_processor.process_uploaded_file(
-                    file_obj, file_obj.name, save_to_db=True,
-                    excel_sheet_name=daily_chosen_sheets.get(file_obj.name),
-                    replace=rev_replace)
-            pending.append((file_obj.name, result))
-            if result.success:
-                any_success = True
-                if result.report_date and (latest_date is None or result.report_date > latest_date):
-                    latest_date = result.report_date
-        if latest_date:
-            set_active_date(latest_date)
-        st.session_state["_up_revenue_results"] = pending
-        if any_success:
-            clear_data_cache()
-            st.toast("Processing complete.", icon="✅")
-        st.rerun()
+    # Analyse first (nothing saved), then Save the analysed result
+    if st.button("🔍 Analyse", type="primary", disabled=not uploaded_files, key="up_rev_analyse"):
+        st.session_state["_up_rev_pending"] = [
+            (f.name, daily_chosen_sheets.get(f.name)) for f in uploaded_files]
+        st.session_state.pop("_up_revenue_results", None)
+
+    _rev_pending = st.session_state.get("_up_rev_pending") or []
+    _rev_files = {f.name: f for f in (uploaded_files or [])}
+    _rev_ready = []
+    for _i, (_name, _sheet) in enumerate(_rev_pending):
+        _f = _rev_files.get(_name)
+        if _f is None:
+            continue                       # file removed from the uploader
+        with st.spinner(f"🔍 Analysing {_name}…"):
+            _res, _ident, _an = _analyse_revenue(_f.getvalue(), _name, _sheet)
+        if _res.success:
+            analyse_panel.render(_name, _ident, _an, preview=_res.df, key=f"rev{_i}")
+            _rev_ready.append((_name, _sheet))
+        else:
+            upload_status.render_result_from_process_result(
+                _res, expected_format=upload_status.FORMAT_DAILY_REPORT)
+        if _res.success and _res.skipped_rows is not None and not _res.skipped_rows.empty:
+            upload_status.render_skipped_rows(_res.skipped_rows, _name)
+    if _rev_pending:
+        _c1, _c2 = st.columns([1, 4])
+        _save = _c1.button("💾 Save", type="primary", disabled=not _rev_ready, key="up_rev_save")
+        if _c2.button("✖️ Cancel", key="up_rev_cancel"):
+            st.session_state.pop("_up_rev_pending", None)
+            st.rerun()
+        if _save:
+            _ok, _msg = _check_rate_limit()
+            if not _ok:
+                st.error(f"🚫 {_msg}")
+                st.stop()
+            any_success, latest_date, pending = False, None, []
+            for _name, _sheet in _rev_ready:
+                _res, _, _ = _analyse_revenue(_rev_files[_name].getvalue(), _name, _sheet)
+                with st.spinner(f"💾 Saving {_name}…"):
+                    result = data_processor.save_analysed(_res, replace=rev_replace)
+                result.df = None           # keep session state small (AI_RULES 17)
+                pending.append((_name, result))
+                if result.success:
+                    any_success = True
+                    if result.report_date and (latest_date is None or result.report_date > latest_date):
+                        latest_date = result.report_date
+            if latest_date:
+                set_active_date(latest_date)
+            st.session_state["_up_revenue_results"] = pending
+            st.session_state.pop("_up_rev_pending", None)
+            _analyse_revenue.clear()
+            if any_success:
+                clear_data_cache()
+                st.toast("Saved.", icon="✅")
+            st.rerun()
 
     if "_up_revenue_results" in st.session_state:
         for file_name, result in st.session_state["_up_revenue_results"]:
@@ -95,9 +164,6 @@ with tab_rev:
                                  f"dates and locations in this file")
             upload_status.render_result_from_process_result(
                 result, extra_lines=date_line, expected_format=upload_status.FORMAT_DAILY_REPORT)
-            if result.success and result.df is not None:
-                with st.expander(f"Preview — {file_name}"):
-                    st.dataframe(result.df, use_container_width=True)
         if st.button("✖️ Dismiss", key="up_rev_dismiss"):
             del st.session_state["_up_revenue_results"]
             st.rerun()
@@ -148,7 +214,30 @@ with tab_aop:
               "so a corrected AOP file cannot update earlier values."),
     )
 
-    if st.button("📥 Import AOP Targets", disabled=not aop_chosen_sheets):
+    if st.button("🔍 Analyse", type="primary", disabled=not aop_chosen_sheets, key="up_aop_analyse"):
+        st.session_state["_up_aop_pending"] = dict(aop_chosen_sheets)
+        st.session_state.pop("_up_aop_results", None)
+
+    _aop_pending = st.session_state.get("_up_aop_pending") or {}
+    _aop_by_name = {f.name: f for f in (aop_files or [])}
+    for _i, (_name, _sheet) in enumerate(_aop_pending.items()):
+        if _name not in _aop_by_name:
+            continue
+        with st.spinner(f"🔍 Analysing {_name}…"):
+            _ident, _an, _err = _analyse_aop(_aop_by_name[_name].getvalue(), _name, _sheet)
+        if _err:
+            upload_status.render_result(False, _name, _err, stage="reading",
+                                        expected_format=upload_status.FORMAT_AOP)
+        else:
+            analyse_panel.render(_name, _ident, _an, key=f"aop{_i}")
+    _aop_ready = bool(_aop_pending) and set(_aop_pending) <= set(_aop_by_name)
+    if _aop_pending and st.button("✖️ Cancel", key="up_aop_cancel"):
+        st.session_state.pop("_up_aop_pending", None)
+        st.rerun()
+
+    if _aop_pending and st.button("💾 Save", type="primary", disabled=not _aop_ready,
+                                  key="up_aop_save"):
+        st.session_state.pop("_up_aop_pending", None)
         from modules import aop_parser
         from modules import eats_skyplates_aop_parser as _esp_parser
         pending_aop = []
@@ -218,6 +307,7 @@ with tab_aop:
                     pending_aop.append({"success":False,"file_name":aop_file.name,
                         "message":str(exc),"stage":"saving"})
         st.session_state["_up_aop_results"] = pending_aop
+        _analyse_aop.clear()
         clear_data_cache()  # new data must show on every page immediately
         st.rerun()
 
@@ -278,36 +368,51 @@ with tab_traffic:
               "so a corrected traffic file cannot update earlier figures."),
     )
 
-    if st.button("📥 Import Traffic Data", disabled=not traffic_files) and traffic_files:
-        from modules import traffic_parser
-        pending_t = []
-        for _tf in traffic_files:
-            if hasattr(_tf,"seek"):
-                _tf.seek(0)
-            with st.spinner(f"⏳ Importing '{_tf.name}'…"):
+    if st.button("🔍 Analyse", type="primary", disabled=not traffic_files, key="up_traffic_analyse"):
+        st.session_state["_up_traffic_pending"] = [f.name for f in traffic_files]
+        st.session_state.pop("_up_traffic_results", None)
+
+    _t_pending = st.session_state.get("_up_traffic_pending") or []
+    _t_files = {f.name: f for f in (traffic_files or [])}
+    _t_ready = []
+    for _i, _name in enumerate(_t_pending):
+        _f = _t_files.get(_name)
+        if _f is None:
+            continue
+        with st.spinner(f"🔍 Analysing {_name}…"):
+            _df, _ident, _an, _err = _analyse_traffic(_f.getvalue(), _name)
+        if _err:
+            upload_status.render_result(False, _name, _err, stage="reading",
+                                        expected_format=upload_status.FORMAT_TRAFFIC)
+            continue
+        analyse_panel.render(_name, _ident, _an, preview=_df, key=f"tr{_i}")
+        _t_ready.append(_name)
+    if _t_pending:
+        _c1, _c2 = st.columns([1, 4])
+        _save = _c1.button("💾 Save", type="primary", disabled=not _t_ready, key="up_traffic_save")
+        if _c2.button("✖️ Cancel", key="up_traffic_cancel"):
+            st.session_state.pop("_up_traffic_pending", None)
+            st.rerun()
+        if _save:
+            pending_t = []
+            for _name in _t_ready:
+                _parsed, _, _, _ = _analyse_traffic(_t_files[_name].getvalue(), _name)
                 try:
-                    _parsed = traffic_parser.parse_traffic_auto(_tf, _tf.name)
-                    _err = None
-                except Exception as _exc:
-                    _parsed, _err = None, (str(_exc), "reading")
-                if _parsed is not None:
-                    try:
-                        _sr = database.save_traffic_dataframe(_parsed, _tf.name, replace=traffic_replace)
-                        pending_t.append({"success":True,"file_name":_tf.name,
-                            "inserted":_sr["inserted"],"skipped":_sr["skipped"],
-                            "rows_parsed":len(_parsed),"parsed_df":_parsed,
-                            "skipped_sheets":_parsed.attrs.get("skipped_sheets", []),
-                            "replaced":_sr.get("replaced", 0)})
-                    except Exception as _exc2:
-                        pending_t.append({"success":False,"file_name":_tf.name,
-                            "message":str(_exc2),"stage":"saving"})
-                else:
-                    _msg, _stage = _err
-                    pending_t.append({"success":False,"file_name":_tf.name,
-                        "message":_msg,"stage":_stage})
-        st.session_state["_up_traffic_results"] = pending_t
-        clear_data_cache()  # new data must show on every page immediately
-        st.rerun()
+                    with st.spinner(f"💾 Saving {_name}…"):
+                        _sr = database.save_traffic_dataframe(_parsed, _name, replace=traffic_replace)
+                    pending_t.append({"success": True, "file_name": _name,
+                        "inserted": _sr["inserted"], "skipped": _sr["skipped"],
+                        "rows_parsed": len(_parsed),
+                        "skipped_sheets": _parsed.attrs.get("skipped_sheets", []),
+                        "replaced": _sr.get("replaced", 0)})
+                except Exception as _exc2:
+                    pending_t.append({"success": False, "file_name": _name,
+                        "message": str(_exc2), "stage": "saving"})
+            st.session_state["_up_traffic_results"] = pending_t
+            st.session_state.pop("_up_traffic_pending", None)
+            _analyse_traffic.clear()
+            clear_data_cache()  # new data must show on every page immediately
+            st.rerun()
 
     if "_up_traffic_results" in st.session_state:
         for _tr in st.session_state["_up_traffic_results"]:
@@ -319,8 +424,6 @@ with tab_traffic:
                                    if _tr.get("replaced") else []))
                 for _msg in _tr.get("skipped_sheets") or []:
                     st.warning(f"⚠️ {_msg}")
-                with st.expander(f"📋 Preview — {_tr['file_name']}", expanded=True):
-                    st.dataframe(_tr["parsed_df"], use_container_width=True, hide_index=True)
             else:
                 upload_status.render_result(False, _tr["file_name"], _tr["message"],
                     stage=_tr["stage"], expected_format=upload_status.FORMAT_TRAFFIC)

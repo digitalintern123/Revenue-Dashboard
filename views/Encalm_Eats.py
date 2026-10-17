@@ -22,6 +22,24 @@ render_user_badge()
 from modules import ui
 ui.page_header("Encalm Eats", "Encalm Eats outlet performance by location.", icon="utensils")
 
+@st.cache_data(max_entries=2, ttl=1800, show_spinner=False)
+def _analyse_dsr(file_bytes: bytes, name: str):
+    """Parse a DSR for the Analyse panel (cached so Save reuses it)."""
+    import io
+    from modules.encalm_eats_dsr_parser import parse_dsr
+    from modules import database as _db, format_registry, upload_checks
+    try:
+        result = parse_dsr(io.BytesIO(file_bytes), name)
+    except Exception as exc:
+        return None, None, None, str(exc)
+    stored = None
+    if result.records:
+        dates = [r.date for r in result.records]
+        stored = _db.load_encalm_eats_dsr_for_range(min(dates), max(dates))
+    analysis = upload_checks.analyse_dsr(result, stored)
+    return result, format_registry.identify_dsr(file_bytes, name, result), analysis, None
+
+
 tab_analytics, tab_dsr = st.tabs(["Analytics", "Upload DSR"], key="eats_tabs")
 ui.tab_icons("eats_tabs", ["chart-column", "upload"])
 
@@ -221,87 +239,71 @@ with tab_dsr:
     if uploaded:
         st.info(f"**{uploaded.name}** — {uploaded.size / 1024:.1f} KB")
 
-        if st.button("🚀 Parse & Import DSR", type="primary", key="eats_dsr_btn"):
-            from modules.encalm_eats_dsr_parser import parse_dsr
-            from modules.database import save_encalm_eats_dsr, init_db
+        if st.button("🔍 Analyse", type="primary", key="eats_dsr_btn"):
+            st.session_state["_eats_dsr_pending"] = uploaded.name
 
-            init_db()
+    if uploaded and st.session_state.get("_eats_dsr_pending") == uploaded.name:
+        from modules.database import save_encalm_eats_dsr, init_db
+        from modules import analyse_panel
 
-            with st.spinner("Parsing DSR workbook..."):
-                try:
-                    result = parse_dsr(uploaded, uploaded.name)
-                except Exception as exc:
-                    st.error(f"Parser error: {exc}")
-                    import traceback
-                    st.code(traceback.format_exc())
-                    st.stop()
+        init_db()
 
-            if not result.success:
-                st.error("DSR parsing failed.")
-                for e in result.errors:
-                    st.error(e)
+        with st.spinner("Analysing DSR workbook..."):
+            result, ident, analysis, err = _analyse_dsr(uploaded.getvalue(), uploaded.name)
+        if err:
+            st.error(f"Parser error: {err}")
+            st.stop()
+
+        if not result.success:
+            st.error("DSR parsing failed.")
+            for e in result.errors:
+                st.error(e)
+            st.stop()
+
+        df = result.df
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Sheets",        result.sheets_parsed)
+        c2.metric("Records",       f"{result.rows_extracted:,}")
+        c3.metric("Total Covers",  f"{result.parsed_total_covers:,.0f}")
+        c4.metric("Total Revenue", f"₹{result.parsed_total_revenue:,.0f}")
+        analysis_preview = df[["date", "outlet", "location", "covers", "net_revenue"]]
+        analyse_panel.render(uploaded.name, ident, analysis, preview=analysis_preview,
+                             key="dsr")
+
+        _c1, _c2 = st.columns([1, 4])
+        _save = _c1.button("💾 Save", type="primary", key="eats_dsr_save")
+        if _c2.button("✖️ Cancel", key="eats_dsr_cancel"):
+            st.session_state.pop("_eats_dsr_pending", None)
+            st.rerun()
+        if not _save:
+            st.stop()
+        st.session_state.pop("_eats_dsr_pending", None)
+        _analyse_dsr.clear()
+
+        with st.spinner("Saving to database..."):
+            try:
+                save_result = save_encalm_eats_dsr(result.records, uploaded.name)
+            except Exception as exc:
+                st.error(f"Database save failed: {exc}")
+                import traceback
+                st.code(traceback.format_exc())
                 st.stop()
 
+        ins = save_result["inserted"]
+        skp = save_result["skipped"]
+        if ins > 0:
+            from modules.cached_db import clear_data_cache
+            clear_data_cache()
+
+        if ins > 0:
             st.success(
-                f"Parsed — **{result.rows_extracted:,}** outlet records "
-                f"across **{result.sheets_parsed}** daily sheets."
+                f"✅ Saved **{ins:,}** new records. "
+                f"Skipped **{skp:,}** duplicates. "
+                f"Switch to **Analytics** tab to view the outlet breakdown."
             )
-
-            df = result.df
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Sheets",        result.sheets_parsed)
-            c2.metric("Records",       f"{result.rows_extracted:,}")
-            c3.metric("Total Covers",  f"{result.parsed_total_covers:,.0f}")
-            c4.metric("Total Revenue", f"₹{result.parsed_total_revenue:,.0f}")
-
-            if result.source_grand_total_revenue is not None:
-                st.caption(
-                    f"DSR last-sheet grand total — "
-                    f"Covers: **{result.source_grand_total_covers or 0:,.0f}** | "
-                    f"Revenue: **₹{result.source_grand_total_revenue:,.0f}**"
-                )
-
-            st.caption(
-                f"Period: **{df['date'].min()}** to **{df['date'].max()}** | "
-                f"Locations: **{', '.join(sorted(df['location'].unique()))}** | "
-                f"Outlets: **{', '.join(sorted(df['outlet'].unique()))}**"
+        elif skp > 0:
+            st.warning(
+                f"All {skp:,} records already exist — this DSR has already been uploaded."
             )
-
-            if result.warnings:
-                with st.expander(f"⚠️ {len(result.warnings)} warnings"):
-                    for w in result.warnings:
-                        st.caption(w)
-
-            with st.expander("Preview (first 20 rows)"):
-                st.dataframe(
-                    df[["date", "outlet", "location", "covers", "net_revenue"]].head(20),
-                    use_container_width=True, hide_index=True,
-                )
-
-            with st.spinner("Saving to database..."):
-                try:
-                    save_result = save_encalm_eats_dsr(result.records, uploaded.name)
-                except Exception as exc:
-                    st.error(f"Database save failed: {exc}")
-                    import traceback
-                    st.code(traceback.format_exc())
-                    st.stop()
-
-            ins = save_result["inserted"]
-            skp = save_result["skipped"]
-            if ins > 0:
-                from modules.cached_db import clear_data_cache
-                clear_data_cache()
-
-            if ins > 0:
-                st.success(
-                    f"✅ Saved **{ins:,}** new records. "
-                    f"Skipped **{skp:,}** duplicates. "
-                    f"Switch to **Analytics** tab to view the outlet breakdown."
-                )
-            elif skp > 0:
-                st.warning(
-                    f"All {skp:,} records already exist — this DSR has already been uploaded."
-                )
-            else:
-                st.info("No records were saved.")
+        else:
+            st.info("No records were saved.")

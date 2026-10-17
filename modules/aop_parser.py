@@ -1101,6 +1101,7 @@ def parse_aop_auto(file_obj, sheet_name: Optional[str] = None) -> dict:
         if _find_header_row(preview) is not None:
             result = parse_outlet_monthly_aop(file_obj, sheet_name=sheet_name)
             result["format"] = "outlet_monthly"
+            result["sheet_name"] = sheet_name
             return result
 
         header_row_idx = _find_date_header_row_deep(preview)
@@ -1117,6 +1118,7 @@ def parse_aop_auto(file_obj, sheet_name: Optional[str] = None) -> dict:
                 try:
                     result = parse_daily_outlet_pivot_aop(file_obj, sheet_name=sheet_name)
                     result["format"] = "daily_outlet_pivot"
+                    result["sheet_name"] = sheet_name
                     return result
                 except AOPParseError:
                     pass  # fall through and try the plain daily-pivot format below
@@ -1125,6 +1127,7 @@ def parse_aop_auto(file_obj, sheet_name: Optional[str] = None) -> dict:
                 file_obj.seek(0)
             result = parse_daily_pivot_aop(file_obj, sheet_name=sheet_name)
             result["format"] = "daily_pivot"
+            result["sheet_name"] = sheet_name
             return result
 
         raise AOPParseError(
@@ -1140,6 +1143,7 @@ def parse_aop_auto(file_obj, sheet_name: Optional[str] = None) -> dict:
             file_obj.seek(0)
         result = parse_outlet_monthly_aop(file_obj, sheet_name=monthly_sheet)
         result["format"] = "outlet_monthly"
+        result["sheet_name"] = monthly_sheet
         return result
 
     if hasattr(file_obj, "seek"):
@@ -1150,6 +1154,7 @@ def parse_aop_auto(file_obj, sheet_name: Optional[str] = None) -> dict:
             file_obj.seek(0)
         result = parse_daily_outlet_pivot_aop(file_obj, sheet_name=outlet_pivot_match["sheet_name"])
         result["format"] = "daily_outlet_pivot"
+        result["sheet_name"] = outlet_pivot_match["sheet_name"]
         return result
 
     if hasattr(file_obj, "seek"):
@@ -1160,6 +1165,7 @@ def parse_aop_auto(file_obj, sheet_name: Optional[str] = None) -> dict:
             file_obj.seek(0)
         result = parse_daily_pivot_aop(file_obj, sheet_name=daily_sheet)
         result["format"] = "daily_pivot"
+        result["sheet_name"] = daily_sheet
         return result
 
     try:
